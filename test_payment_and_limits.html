@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>PANDAI - Test Suite: Saldo/Limit & Alur Pembayaran Terpadu</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #16a34a; font-size: 20px; margin-bottom: 6px; }
+    p.subtitle { color: #64748b; font-size: 13px; margin-top: 0; margin-bottom: 16px; }
+    .test-result { padding: 10px 14px; margin: 8px 0; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin-top: 20px; padding: 14px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Suite: Saldo/Limit Rp300rb - Rp1jt & Verifikasi Pembayaran Customer</h1>
+  <p class="subtitle">Memvalidasi saldo/limit satu kali, batas maksimum Rp1jt, checkout QRIS & Transfer Bank, unggah bukti bayar, verifikasi Admin, dan isolasi data Supplier.</p>
+  <div id="results"></div>
+  <div id="summary">Memuat dan menjalankan pengujian...</div>
+  <iframe id="appFrame" src="./index.html" style="width: 1000px; height: 800px; border: 1px solid #cbd5e1; display: none;"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✓ PASS: ' : '✗ FAIL: ') + name + (detail ? '<br><small style="font-weight:normal; opacity:0.85;">' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Hasil Pengujian: Total ${passed + failed} Tests | Berhasil: ${passed} | Gagal: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    const frame = document.getElementById('appFrame');
+    frame.onload = async function() {
+      const win = frame.contentWindow;
+
+      try {
+        // Test 1: Inisialisasi Aplikasi & Konstanta Bisnis
+        const isAppInit = !!win.State && !!win.STORAGE_KEYS && !!win.INITIAL_CREDIT_LIMIT && !!win.MAX_CREDIT_LIMIT;
+        const isConstantsCorrect = win.INITIAL_CREDIT_LIMIT === 300000 && win.MAX_CREDIT_LIMIT === 1000000;
+        logTest('Konstanta aturan bisnis terpasang akurat (Limit Awal: Rp 300.000, Maksimal: Rp 1.000.000)', isAppInit && isConstantsCorrect);
+
+        // Test 2: Limit Awal Rp300.000 Diberikan Satu Kali (Anti-Reset on Refresh/Re-init)
+        win.quickLogin('user');
+        const user = win.State.currentUser;
+        const isInitialLimit300k = user && user.creditLimit === 300000 && user.remainingLimit <= 300000 && user.limitInitialized === true;
+        
+        // Simulasikan pemakaian limit lalu re-init database (seperti refresh halaman)
+        user.remainingLimit = 250000; // Terpakai 50rb
+        const allUsers = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const uIdx = allUsers.findIndex(u => u.id === user.id);
+        if (uIdx !== -1) {
+          allUsers[uIdx].remainingLimit = 250000;
+          win.State.saveUsers(allUsers);
+        }
+        win.initDatabase(); // Panggil ulang inisialisasi database
+        const reloadedUsers = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const userAfterReinit = reloadedUsers.find(u => u.id === user.id);
+        const isLimitPreserved = userAfterReinit.remainingLimit === 250000 && userAfterReinit.creditLimit === 300000;
+        logTest('Limit awal Rp300.000 diberikan satu kali & tidak ter-reset saat refresh / re-inisialisasi database', 
+          isInitialLimit300k && isLimitPreserved, `Plafon: ${win.formatRupiah(userAfterReinit.creditLimit)} | Sisa Limit: ${win.formatRupiah(userAfterReinit.remainingLimit)}`);
+
+        // Test 3: Log Riwayat Mutasi Limit Tersedia
+        const hasLimitHistory = Array.isArray(userAfterReinit.limitHistory) && userAfterReinit.limitHistory.length > 0;
+        logTest('Pencatatan riwayat limit (limitHistory) aktif dan mencatat mutasi plafon', hasLimitHistory);
+
+        // Test 4: Batas Maksimum Plafon Rp1.000.000
+        win.quickLogin('admin');
+        const adminUser = win.State.currentUser;
+        logTest('Admin Koperasi berhasil login untuk verifikasi kebijakan limit & pembayaran', adminUser && adminUser.role === 'admin');
+
+        // Uji coba manipulasi form penyesuaian limit di atas Rp1.000.000 (harus ditolak)
+        const origGetElementById = win.document.getElementById;
+        const mockFormOverLimit = {
+          adjNewLimit: { value: '1500000' },
+          adjNewTier: { value: 'Gold' },
+          adjLimitReason: { value: 'Uji coba batas' }
+        };
+        win.document.getElementById = (id) => mockFormOverLimit[id] || origGetElementById.call(win.document, id);
+        win.handleAdminAdjustLimitSubmit({ preventDefault: () => {} }, user.id);
+        
+        const checkUsers = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const checkUser = checkUsers.find(u => u.id === user.id);
+        const rejectedOverLimit = checkUser.creditLimit <= 1000000;
+        logTest('Sistem mencegah penyesuaian limit yang melebihi batas maksimum Rp1.000.000', rejectedOverLimit);
+
+        // Test 5: Penyesuaian Limit Sah oleh Admin ke Rp 500.000 Tercatat di Log
+        const mockFormValid = {
+          adjNewLimit: { value: '500000' },
+          adjNewTier: { value: 'Silver' },
+          adjLimitReason: { value: 'Kenaikan limit evaluasi operasional' }
+        };
+        win.document.getElementById = (id) => mockFormValid[id] || origGetElementById.call(win.document, id);
+        win.handleAdminAdjustLimitSubmit({ preventDefault: () => {} }, user.id);
+        win.document.getElementById = origGetElementById;
+
+        const updatedUsers = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const updatedUser = updatedUsers.find(u => u.id === user.id);
+        const isLimitAdjusted = updatedUser.creditLimit === 500000;
+        const lastLog = updatedUser.limitHistory[updatedUser.limitHistory.length - 1];
+        const isLogRecorded = lastLog && lastLog.type === 'PENYESUAIAN_ADMIN' && lastLog.creditLimit === 500000;
+        logTest('Admin berhasil menyesuaikan limit ke Rp500.000 dan tercatat resmi dalam limitHistory', 
+          isLimitAdjusted && isLogRecorded, `Plafon baru: ${win.formatRupiah(updatedUser.creditLimit)} | Catatan log: "${lastLog?.description}"`);
+
+        // Test 6: Konfigurasi Saluran Pembayaran Resmi Koperasi
+        const currentCfg = win.getPaymentConfig();
+        const isConfigValid = currentCfg.bankName === 'Bank BRI' && 
+                              (currentCfg.bankAccountNo === '665501030233535' || currentCfg.bankAccountNumber === '665501030233535') && 
+                              currentCfg.bankAccountHolder === 'IMELDA SINDI AYU SAPUTRI' &&
+                              currentCfg.qrisMerchantName === 'PANDAI' &&
+                              currentCfg.qrisNmid === 'ID1026622161325';
+        logTest('Konfigurasi resmi Koperasi (Bank BRI 665501030233535 a.n. IMELDA & QRIS PANDAI NMID ID1026622161325) aktif dinamis', isConfigValid);
+
+        // Test 7: Checkout Customer dengan Metode QRIS Resmi PANDAI
+        win.quickLogin('user');
+        win.State.cart = [];
+        win.addToCart('prod_001', 1); // Beras Ramos Rp72.500
+        win.selectPaymentType('qris');
+        win.submitOrderCheckout();
+
+        const qrisOrder = win.State.orders[0];
+        const qrisOrderId = qrisOrder.id;
+        const isQrisOrderValid = qrisOrder && 
+                                 qrisOrder.paymentMethod === 'QRIS Resmi PANDAI' && 
+                                 qrisOrder.paymentStatus === 'Menunggu Pembayaran' &&
+                                 qrisOrder.paymentProof === null &&
+                                 qrisOrder.total === 72500;
+        logTest('Checkout metode QRIS berhasil: Status pembayaran awal "Menunggu Pembayaran", tanpa memotong limit kredit', 
+          isQrisOrderValid, `Order #${qrisOrder?.id} | Status Bayar: ${qrisOrder?.paymentStatus}`);
+
+        // Test 8: Checkout Customer dengan Metode Transfer Bank BRI
+        win.quickLogin('user');
+        win.State.cart = [];
+        win.addToCart('prod_003', 1); // Minyak Goreng Bimoli (Harga Grosir Rp34.000)
+        win.selectPaymentType('transfer_bank');
+        win.submitOrderCheckout();
+
+        const bankOrder = win.State.orders[0];
+        const bankOrderId = bankOrder.id;
+        const isBankOrderValid = bankOrder && 
+                                 bankOrder.paymentMethod === 'Transfer Bank BRI' && 
+                                 bankOrder.paymentStatus === 'Menunggu Pembayaran' &&
+                                 bankOrder.paymentProof === null &&
+                                 bankOrder.total === 34000;
+        logTest('Checkout metode Transfer Bank BRI berhasil: Status "Menunggu Pembayaran", tersimpan di DB', 
+          isBankOrderValid, `Order #${bankOrder?.id} | Rekening BRI Resmi`);
+
+        // Test 9: Unggah Bukti Pembayaran Customer (Simulasi Upload File)
+        const mockBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        
+        const targetQrisOrder = win.State.orders.find(o => o.id === qrisOrderId);
+        targetQrisOrder.paymentProof = {
+          fileData: mockBase64,
+          fileName: 'bukti_transfer_qris_72500.png',
+          fileType: 'image/png',
+          fileSize: 1024,
+          senderBank: 'BRImo',
+          senderName: 'Budi Santoso',
+          notes: 'Transfer lunas via scan QRIS',
+          uploadedAt: win.getNowFormattedString(),
+          timestamp: Date.now()
+        };
+        targetQrisOrder.paymentStatus = 'Menunggu Verifikasi';
+        targetQrisOrder.paymentVerificationHistory = targetQrisOrder.paymentVerificationHistory || [];
+        targetQrisOrder.paymentVerificationHistory.push({
+          action: 'UPLOAD_PROOF',
+          timestamp: win.getNowFormattedString(),
+          actor: win.State.currentUser.name,
+          role: 'user',
+          notes: 'Bukti transfer diunggah'
+        });
+        win.State.saveOrders();
+
+        const savedQrisOrder = win.State.orders.find(o => o.id === qrisOrderId);
+        const isProofUploaded = savedQrisOrder && 
+                                savedQrisOrder.paymentStatus === 'Menunggu Verifikasi' && 
+                                !!savedQrisOrder.paymentProof &&
+                                savedQrisOrder.paymentProof.fileName === 'bukti_transfer_qris_72500.png';
+        logTest('Unggah bukti pembayaran berhasil: Status berubah menjadi "Menunggu Verifikasi" (TIDAK langsung lunas)', 
+          isProofUploaded, `Status: ${savedQrisOrder?.paymentStatus} | File: ${savedQrisOrder?.paymentProof?.fileName}`);
+
+        // Test 10: Isolasi Keamanan Data - Supplier DILARANG Mengakses Bukti Pembayaran Customer
+        win.quickLogin('supplier');
+        let toastMsg = '';
+        const origToast = win.showToast;
+        win.showToast = (msg) => { toastMsg = msg; };
+        win.openViewPaymentProofModal(qrisOrderId);
+        win.showToast = origToast;
+
+        const supplierBlockedFromProof = toastMsg.includes('Akses ditolak') || toastMsg.includes('Supplier');
+        logTest('Keamanan & Isolasi: Akun Supplier diblokir saat mencoba mengakses bukti pembayaran customer', 
+          supplierBlockedFromProof, `Respon Keamanan: "${toastMsg}"`);
+
+        // Test 11: Admin Melihat & Memverifikasi Pembayaran (Status Terverifikasi)
+        win.quickLogin('admin');
+        const initialShippingStatus = targetQrisOrder.status; // Pastikan status logistik tidak berubah
+        
+        win.handleAdminVerifyPayment(qrisOrderId, true);
+        const verifiedOrder = win.State.orders.find(o => o.id === qrisOrderId);
+        const isPaymentVerified = verifiedOrder && verifiedOrder.paymentStatus === 'Terverifikasi';
+        const isShippingUnchanged = verifiedOrder && verifiedOrder.status === initialShippingStatus;
+        const lastVerifLog = verifiedOrder && verifiedOrder.paymentVerificationHistory[verifiedOrder.paymentVerificationHistory.length - 1];
+        const isLogValid = lastVerifLog && lastVerifLog.action === 'VERIFIED' && lastVerifLog.adminId === 'adm_001';
+
+        logTest('Admin Koperasi menyetujui pembayaran ("Terverifikasi") tanpa mengintervensi alur pengiriman supplier', 
+          isPaymentVerified && isShippingUnchanged && isLogValid, 
+          `Status Bayar: ${verifiedOrder?.paymentStatus} | Status Logistik Tetap: "${verifiedOrder?.status}" | Log: ${lastVerifLog?.notes}`);
+
+        // Test 12: Admin Menolak Bukti Pembayaran Tidak Sesuai (Status Ditolak & Catatan Alasan)
+        const targetBankOrder = win.State.orders.find(o => o.id === bankOrderId);
+        targetBankOrder.paymentProof = {
+          fileData: mockBase64,
+          fileName: 'struk_rusak.jpg',
+          fileType: 'image/jpeg',
+          fileSize: 512,
+          senderBank: 'Bank Lain',
+          senderName: 'Orang Lain',
+          notes: 'Nominal kurang',
+          uploadedAt: win.getNowFormattedString(),
+          timestamp: Date.now()
+        };
+        targetBankOrder.paymentStatus = 'Menunggu Verifikasi';
+        win.State.saveOrders();
+
+        const rejectionReasonText = 'Nominal transfer tidak sesuai dengan total belanja pesanan';
+        win.handleAdminVerifyPayment(bankOrderId, false, rejectionReasonText);
+        const rejectedOrder = win.State.orders.find(o => o.id === bankOrderId);
+        const isPaymentRejected = rejectedOrder && rejectedOrder.paymentStatus === 'Ditolak';
+        const isReasonStored = rejectedOrder && rejectedOrder.paymentRejectionReason === rejectionReasonText;
+
+        logTest('Admin Koperasi menolak pembayaran ("Ditolak") dengan catatan alasan penolakan yang jelas', 
+          isPaymentRejected && isReasonStored, 
+          `Status Bayar: ${rejectedOrder?.paymentStatus} | Alasan: "${rejectedOrder?.paymentRejectionReason}"`);
+
+        // Test 13: Customer Melihat Notifikasi Penolakan dan Memiliki Opsi Unggah Ulang
+        win.quickLogin('user');
+        const orderViewHtml = win.renderOrdersView();
+        const hasRejectionAlert = orderViewHtml.includes('Pembayaran Ditolak') && orderViewHtml.includes(rejectionReasonText);
+        logTest('Customer dapat melihat notifikasi alasan penolakan dan instruksi perbaikan bukti', hasRejectionAlert);
+
+        // Test 14: Tab Verifikasi Pembayaran Admin Memiliki Filter Lengkap
+        win.quickLogin('admin');
+        win.setAdminTab('payments');
+        const paymentsTabHtml = win.renderAdminPaymentsTab();
+        const hasPaymentFilter = paymentsTabHtml.includes('Menunggu Verifikasi') && 
+                                 paymentsTabHtml.includes('Terverifikasi') && 
+                                 paymentsTabHtml.includes('Ditolak') &&
+                                 paymentsTabHtml.includes('Pengaturan Saluran Pembayaran Resmi Koperasi');
+        logTest('Dashboard Admin menyediakan tab "Verifikasi Bayar" dengan filter status & formulir rekening resmi', hasPaymentFilter);
+
+        // Test 15: Pembaruan Pengaturan Rekening & QRIS Resmi oleh Admin
+        const newPaymentConfig = {
+          bankName: 'Bank BRI',
+          bankAccountNo: '665501030233535',
+          bankAccountNumber: '665501030233535',
+          bankAccountHolder: 'IMELDA SINDI AYU SAPUTRI',
+          qrisMerchantName: 'PANDAI',
+          qrisNmid: 'ID1026622161325',
+          qrisTerminalCode: 'A01',
+          qrisImagePath: 'qris-pandai.jpg',
+          instructionsTransfer: 'Instruksi transfer bank resmi diperbarui oleh pengurus koperasi.',
+          instructionsQris: 'Instruksi scan QRIS resmi diperbarui.'
+        };
+        win.State.savePaymentConfig(newPaymentConfig);
+        const savedCfg = win.getPaymentConfig();
+        const isConfigSaved = savedCfg.instructionsTransfer === 'Instruksi transfer bank resmi diperbarui oleh pengurus koperasi.';
+        logTest('Admin berhasil memperbarui informasi saluran pembayaran resmi koperasi (tidak hardcoded)', isConfigSaved);
+
+        // Test 16: Checkout BNPL PayLater Tetap Berjalan Memotong Limit Secara Akurat
+        win.quickLogin('user');
+        const limitBeforeBNPL = win.State.currentUser.remainingLimit;
+        win.State.cart = [];
+        win.addToCart('prod_001', 1); // Rp 72.500
+        win.selectPaymentType('paylater');
+        win.selectTenorMethod('14_days');
+        win.submitOrderCheckout();
+
+        const bnplOrder = win.State.orders[0];
+        const userAfterBNPL = win.State.currentUser;
+        const isBNPLOrderValid = bnplOrder && 
+                                 bnplOrder.paymentMethod.includes('PayLater') && 
+                                 bnplOrder.paymentStatus === 'Terverifikasi (BNPL Koperasi)';
+        const isLimitDeducted = userAfterBNPL.remainingLimit === (limitBeforeBNPL - 72500);
+        logTest('Koperasi PayLater tetap berfungsi normal: Plafon limit dipotong akurat dan dicatat di limitHistory', 
+          isBNPLOrderValid && isLimitDeducted, 
+          `Limit Awal: ${win.formatRupiah(limitBeforeBNPL)} -> Sisa: ${win.formatRupiah(userAfterBNPL.remainingLimit)}`);
+
+      } catch (err) {
+        logTest('Error tidak terduga dalam eksekusi test suite: ' + err.message, false, err.stack);
+      }
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>PANDAI - Order & Shipping Flow Comprehensive Test Suite</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #16a34a; font-size: 20px; margin-bottom: 6px; }
+    p.subtitle { color: #64748b; font-size: 13px; margin-top: 0; margin-bottom: 16px; }
+    .test-result { padding: 10px 14px; margin: 8px 0; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin-top: 20px; padding: 14px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Suite: Alur Pemesanan & Pengiriman Terintegrasi (Warung - Supplier - Admin)</h1>
+  <p class="subtitle">Memverifikasi 7 tahapan pelacakan nyata, konfirmasi pesanan supplier, pemotongan stok otomatis, penugasan armada admin, dan konfirmasi penerimaan warung.</p>
+  <div id="results"></div>
+  <div id="summary">Memuat dan menjalankan pengujian...</div>
+  <iframe id="appFrame" src="./index.html" style="width: 1000px; height: 800px; border: 1px solid #cbd5e1; display: none;"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✓ PASS: ' : '✗ FAIL: ') + name + (detail ? '<br><small style="font-weight:normal; opacity:0.85;">' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Hasil Pengujian: Total ${passed + failed} Tests | Berhasil: ${passed} | Gagal: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    const frame = document.getElementById('appFrame');
+    frame.onload = async function() {
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+
+      const getOrder = (id) => win.State.orders.find(o => o.id === id);
+
+      try {
+        // Test 1: Window and Application Load
+        logTest('Aplikasi PANDAI berhasil diinisialisasi di iframe', !!win.State && !!win.STORAGE_KEYS);
+
+        // Test 2: Database Schema & Canonical Orders Validation
+        const orders = win.State.orders;
+        const schemaValid = orders.length > 0 && orders.every(o => 
+          !!o.buyerName && 
+          !!o.shippingAddress && 
+          Array.isArray(o.items) && 
+          o.items.every(i => !!i.supplierId && !!i.supplierName) &&
+          Array.isArray(o.trackingSteps) && 
+          o.trackingSteps.length === 7
+        );
+        logTest('Skema pesanan valid dengan 7 tahapan pelacakan & identitas supplier pada setiap item', schemaValid, `Total pesanan awal: ${orders.length}`);
+
+        // Test 3: UMKM Warung Login
+        win.quickLogin('user');
+        const isUserLoggedIn = win.State.currentUser && win.State.currentUser.role === 'user';
+        logTest('Mitra Warung UMKM berhasil login (usr_001)', isUserLoggedIn, `User: ${win.State.currentUser?.email}`);
+
+        // Test 4: Warung Melakukan Checkout Belanja
+        win.State.cart = [];
+        const prodRice = win.State.products.find(p => p.id === 'prod_001');
+        const prodOil = win.State.products.find(p => p.id === 'prod_004');
+        const initialRiceStock = prodRice ? Number(prodRice.stock) : 0;
+        const initialOilStock = prodOil ? Number(prodOil.stock) : 0;
+
+        win.addToCart('prod_001', 2);
+        win.addToCart('prod_004', 1);
+
+        const cartQty = win.State.cart.reduce((sum, item) => sum + item.qty, 0);
+        logTest('Produk berhasil masuk ke keranjang belanja Mitra Warung', cartQty === 3, `Keranjang: 2 Beras + 1 Minyak Goreng`);
+
+        // Submit checkout
+        win.orderNotes = 'Titip di warung depan gang';
+        win.submitOrderCheckout();
+
+        const newOrderId = win.State.orders[0]?.id;
+        const freshOrder1 = getOrder(newOrderId);
+        const checkoutSuccess = !!freshOrder1 && 
+                                freshOrder1.status === 'Menunggu Konfirmasi Supplier' &&
+                                freshOrder1.items.length === 2 &&
+                                freshOrder1.supplierIds.includes('sup_001') &&
+                                freshOrder1.supplierConfirmations['sup_001'].status === 'Menunggu Konfirmasi' &&
+                                freshOrder1.deliveryMethod === '' &&
+                                freshOrder1.courierName === '' &&
+                                freshOrder1.trackingSteps.length === 7 &&
+                                freshOrder1.trackingSteps[0].done === true &&
+                                freshOrder1.trackingSteps[1].active === true &&
+                                freshOrder1.trackingSteps[2].done === false;
+
+        logTest('Pesanan baru tersimpan permanen di database dengan status "Menunggu Konfirmasi Supplier" dan data pengiriman belum dibuat buatan', checkoutSuccess, `ID Pesanan: #${newOrderId}`);
+
+        // Test 5: Supplier Login & Cek Menu Pesanan Masuk
+        win.quickLogin('supplier');
+        const isSupLoggedIn = win.State.currentUser && win.State.currentUser.role === 'supplier';
+        logTest('Supplier berhasil login (sup_001)', isSupLoggedIn, `User: ${win.State.currentUser?.email}`);
+
+        win.setSupplierTab('orders');
+        const supPortalHtml = doc.getElementById('appContent').innerHTML;
+        const hasIncomingOrdersUI = supPortalHtml.includes('Pesanan Masuk Mitra Warung') && 
+                                    supPortalHtml.includes(newOrderId) &&
+                                    supPortalHtml.includes('Konfirmasi Pesanan');
+        logTest('Dashboard Supplier menampilkan menu Pesanan Masuk dengan rincian pembeli, tujuan, & item pasokan', hasIncomingOrdersUI);
+
+        // Test 6: Supplier Konfirmasi Pesanan & Pemotongan Stok Otomatis
+        win.handleSupplierConfirmOrder(newOrderId);
+
+        const prodRiceAfter = win.State.products.find(p => p.id === 'prod_001');
+        const prodOilAfter = win.State.products.find(p => p.id === 'prod_004');
+        const stockDeductedProperly = (prodRiceAfter.stock === initialRiceStock - 2) && (prodOilAfter.stock === initialOilStock - 1);
+        
+        const freshOrder2 = getOrder(newOrderId);
+        const orderConfirmedProperly = freshOrder2.status === 'Pesanan Dikonfirmasi Supplier' &&
+                                       freshOrder2.supplierConfirmations &&
+                                       freshOrder2.supplierConfirmations['sup_001'] &&
+                                       freshOrder2.supplierConfirmations['sup_001'].status === 'Dikonfirmasi' &&
+                                       freshOrder2.trackingSteps[2].done === true &&
+                                       !!freshOrder2.trackingSteps[2].time;
+
+        logTest('Supplier berhasil mengonfirmasi pesanan dan stok produk otomatis dipotong dari etalase', stockDeductedProperly && orderConfirmedProperly, 
+          `Beras: ${initialRiceStock} -> ${prodRiceAfter?.stock}, Minyak: ${initialOilStock} -> ${prodOilAfter?.stock}, Status: ${freshOrder2.status}`);
+
+        // Test 7: Admin Login & Input Data Pengiriman
+        win.quickLogin('admin');
+        const isAdminLoggedIn = win.State.currentUser && win.State.currentUser.role === 'admin';
+        logTest('Admin Koperasi berhasil login (adm_001)', isAdminLoggedIn, `User: ${win.State.currentUser?.email}`);
+
+        win.setAdminTab('orders');
+        win.openAdminDispatchModal(newOrderId);
+        doc.getElementById('adminDeliveryMethod').value = 'Armada Pick-Up Logistik Koperasi PANDAI';
+        doc.getElementById('adminDeliverySchedule').value = 'Hari Ini, 14.00 WIB';
+        doc.getElementById('adminCourierName').value = 'Pak Dimas Arya Pratama';
+        doc.getElementById('adminCourierPhone').value = '0895363103296';
+        doc.getElementById('adminTrackingNumber').value = 'SJ-TEST-8899';
+        doc.getElementById('adminDeliveryNotes').value = 'Muatan beras dan minyak aman.';
+        win.handleAdminSaveDeliveryPlan(new Event('submit'), newOrderId);
+
+        const freshOrder3 = getOrder(newOrderId);
+        const dispatchSaved = freshOrder3.status === 'Diproses Admin untuk Pengiriman' &&
+                              freshOrder3.deliveryMethod === 'Armada Pick-Up Logistik Koperasi PANDAI' &&
+                              freshOrder3.courierName === 'Pak Dimas Arya Pratama' &&
+                              freshOrder3.trackingNumber === 'SJ-TEST-8899' &&
+                              freshOrder3.trackingSteps[3].done === true &&
+                              !!freshOrder3.trackingSteps[3].time;
+        logTest('Admin berhasil menginput data pengiriman (metode, kurir, resi) dan tahapan ke-4 tercatat', dispatchSaved, `Status: ${freshOrder3.status}, Resi: ${freshOrder3.trackingNumber}`);
+
+        // Test 8: Admin Memberangkatkan Armada ("Dalam Pengiriman")
+        win.handleAdminStartDelivery(newOrderId);
+        const freshOrder4 = getOrder(newOrderId);
+        const shippingStarted = freshOrder4.status === 'Dalam Pengiriman' &&
+                                freshOrder4.trackingSteps[4].done === true &&
+                                !!freshOrder4.trackingSteps[4].time;
+        logTest('Armada diberangkatkan oleh Admin dan tahapan ke-5 aktif dengan waktu riil', shippingStarted, `Status: ${freshOrder4.status}, Waktu: ${freshOrder4.trackingSteps[4].time}`);
+
+        // Test 9: Mitra Warung Konfirmasi Penerimaan Barang
+        win.quickLogin('user');
+        win.confirmOrderReceivedByWarung(newOrderId);
+        const freshOrder5 = getOrder(newOrderId);
+        const orderFinalized = freshOrder5.status === 'Pesanan Selesai' &&
+                               freshOrder5.trackingSteps[5].done === true &&
+                               freshOrder5.trackingSteps[6].done === true &&
+                               !!freshOrder5.trackingSteps[5].time &&
+                               !!freshOrder5.trackingSteps[6].time;
+        logTest('Mitra Warung mengonfirmasi penerimaan sembako dan pesanan tuntas hingga tahapan ke-7', orderFinalized, `Status: ${freshOrder5.status}, Tahap 6: ${freshOrder5.trackingSteps[5].time}, Tahap 7: ${freshOrder5.trackingSteps[6].time}`);
+
+        // Test 10: Uji Alur Penolakan Pesanan oleh Supplier & Pengembalian Limit
+        win.quickLogin('user');
+        const userBefore = JSON.parse(localStorage.getItem(win.STORAGE_KEYS.USERS)).find(u => u.id === 'usr_001');
+        const initialLimit = Number(userBefore.remainingLimit);
+
+        win.State.cart = [];
+        win.addToCart('prod_001', 1);
+        win.submitOrderCheckout();
+        const rejectedOrderId = win.State.orders[0]?.id;
+        
+        const userAfterCheckout = JSON.parse(localStorage.getItem(win.STORAGE_KEYS.USERS)).find(u => u.id === 'usr_001');
+        const limitDeducted = Number(userAfterCheckout.remainingLimit) < initialLimit;
+
+        // Login as Supplier and Reject
+        win.quickLogin('supplier');
+        win.openSupplierRejectOrderModal(rejectedOrderId);
+        doc.getElementById('rejectReasonSelect').value = 'Stok habis / tidak mencukupi di gudang';
+        win.handleSupplierRejectOrderSubmit(new Event('submit'), rejectedOrderId);
+
+        const freshRejectedOrder = getOrder(rejectedOrderId);
+        const userAfterReject = JSON.parse(localStorage.getItem(win.STORAGE_KEYS.USERS)).find(u => u.id === 'usr_001');
+        const limitRefunded = Number(userAfterReject.remainingLimit) === initialLimit;
+        const rejectRecorded = freshRejectedOrder.status === 'Ditolak' &&
+                               freshRejectedOrder.supplierConfirmations['sup_001'].status === 'Ditolak' &&
+                               freshRejectedOrder.rejectionReason === 'Stok habis / tidak mencukupi di gudang';
+
+        logTest('Penolakan pesanan oleh Supplier berhasil mencatat alasan penolakan dan mengembalikan limit BNPL pembeli', 
+          limitDeducted && limitRefunded && rejectRecorded, 
+          `Limit Awal: Rp ${initialLimit} -> Setelah Checkout: Rp ${userAfterCheckout.remainingLimit} -> Setelah Ditolak: Rp ${userAfterReject.remainingLimit}`);
+
+        // Test 11: Validasi Keamanan Hak Akses Antar Peran (Role Security)
+        win.quickLogin('supplier');
+        const unauthorizedAdminDispatch = (function() {
+          let blocked = false;
+          const origShowToast = win.showToast;
+          win.showToast = function(msg, type) {
+            if (type === 'danger' && msg.includes('Akses ditolak')) blocked = true;
+          };
+          win.handleAdminStartDelivery(rejectedOrderId);
+          win.showToast = origShowToast;
+          return blocked;
+        })();
+        logTest('Keamanan Peran: Supplier diblokir mengeksekusi aksi kewenangan Admin', unauthorizedAdminDispatch);
+
+        win.quickLogin('user');
+        const unauthorizedSupplierConfirm = (function() {
+          let blocked = false;
+          const origShowToast = win.showToast;
+          win.showToast = function(msg, type) {
+            if (type === 'danger' && msg.includes('Akses ditolak')) blocked = true;
+          };
+          win.handleSupplierConfirmOrder(rejectedOrderId);
+          win.showToast = origShowToast;
+          return blocked;
+        })();
+        logTest('Keamanan Peran: Mitra Warung diblokir mengeksekusi konfirmasi Supplier', unauthorizedSupplierConfirm);
+
+      } catch (err) {
+        logTest('Terjadi kegagalan eksepsi tidak terduga', false, err.stack || err.message);
+      }
+    };
+  </script>
+</body>
+</html>

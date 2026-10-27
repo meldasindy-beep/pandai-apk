@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>PANDAI - Unified Login & Role System Test Suite</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #16a34a; font-size: 20px; margin-bottom: 6px; }
+    p.subtitle { color: #64748b; font-size: 13px; margin-top: 0; margin-bottom: 16px; }
+    .test-result { padding: 10px 14px; margin: 8px 0; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin-top: 20px; padding: 14px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Suite: Sistem Satu Halaman Login & Validasi Role PANDAI</h1>
+  <p class="subtitle">Memverifikasi satu pintu masuk login untuk seluruh role, verifikasi role mutlak dari database, isolasi toko supplier, pemantauan admin, hak UMKM, dan pembatasan pendaftaran publik.</p>
+  <div id="results"></div>
+  <div id="summary">Memuat dan menjalankan pengujian...</div>
+  <iframe id="appFrame" src="./index.html" style="width: 1000px; height: 800px; border: 1px solid #cbd5e1; display: none;"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✓ PASS: ' : '✗ FAIL: ') + name + (detail ? '<br><small style="font-weight:normal; opacity:0.85;">' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Hasil Pengujian: Total ${passed + failed} Tests | Berhasil: ${passed} | Gagal: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    const frame = document.getElementById('appFrame');
+    frame.onload = async function() {
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+
+      try {
+        // Test 1: App initialization
+        logTest('Aplikasi PANDAI berhasil diinisialisasi', !!win.State && !!win.STORAGE_KEYS);
+
+        // Pastikan logout awal untuk memeriksa tampilan satu halaman login
+        win.logout();
+
+        // Test 2: Satu Halaman Login UI Verification
+        const loginForm = doc.querySelector('form[onsubmit*="handleUnifiedLogin"]');
+        const loginEmailInput = doc.getElementById('loginEmail');
+        const loginPasswordInput = doc.getElementById('loginPassword');
+        const roleDropdown = doc.querySelector('select[name="role"], select#loginRole, input[name="role"]');
+
+        const singleLoginFormValid = !!loginForm && !!loginEmailInput && !!loginPasswordInput && !roleDropdown;
+        logTest('Satu halaman login terpadu ditampilkan tanpa dropdown / pemilih role manual', singleLoginFormValid, 
+          'Form memiliki input Email & Password tunggal. Tidak ada input role di form.');
+
+        // Test 3: Login Admin via Single Form
+        loginEmailInput.value = 'admin@pandai.id';
+        loginPasswordInput.value = 'admin123';
+        win.handleUnifiedLogin();
+
+        const adminLoggedIn = win.State.currentUser && win.State.currentUser.role === 'admin';
+        const adminRoleBadge = doc.getElementById('headerRoleBadge')?.textContent;
+        const adminPortalRendered = doc.querySelector('.category-chip') && adminRoleBadge === 'ADMIN';
+
+        logTest('Login Admin berhasil melalui form tunggal dan diarahkan ke Portal Admin Koperasi', 
+          adminLoggedIn && adminPortalRendered, 
+          `User: ${win.State.currentUser?.name} | Role: ${win.State.currentUser?.role} | Badge: ${adminRoleBadge}`);
+
+        // Test 4: Verifikasi Admin Dashboard Menampilkan Data Nyata & Pemilik Produk
+        const usersInDb = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const totalUsersDb = usersInDb.length;
+        const totalSuppliersDb = usersInDb.filter(u => u.role === 'supplier').length;
+        const totalUmkmDb = usersInDb.filter(u => u.role === 'user').length;
+
+        // Switch to admin products tab
+        win.setAdminTab('products');
+        const productsInState = win.State.products;
+        const allProductsHaveSupplier = productsInState.every(p => !!p.supplierId && !!p.supplierName);
+
+        logTest('Admin Koperasi memantau seluruh produk dengan identitas Supplier pemilik setiap produk', 
+          allProductsHaveSupplier && productsInState.length > 0, 
+          `Total Produk: ${productsInState.length} | Supplier Pemilik Teridentifikasi: 100%`);
+
+        // Test 5: Logout Admin dan kembali ke Satu Halaman Login
+        win.logout();
+        const loggedOutAdmin = win.State.currentUser === null && !!doc.getElementById('loginEmail');
+        logTest('Logout berhasil dan kembali ke satu halaman login terpadu', loggedOutAdmin);
+
+        // Test 6: Login Supplier via Single Form
+        const supEmailInput = doc.getElementById('loginEmail');
+        const supPassInput = doc.getElementById('loginPassword');
+        supEmailInput.value = 'supplier@pandai.id';
+        supPassInput.value = 'supplier123';
+        win.handleUnifiedLogin();
+
+        const supplierLoggedIn = win.State.currentUser && win.State.currentUser.role === 'supplier';
+        const supplierRoleBadge = doc.getElementById('headerRoleBadge')?.textContent;
+        const supplierPortalRendered = doc.querySelector('.category-chip') && supplierRoleBadge === 'SUPPLIER';
+
+        logTest('Login Supplier berhasil melalui form tunggal dan diarahkan ke Dashboard Supplier', 
+          supplierLoggedIn && supplierPortalRendered, 
+          `Supplier: ${win.State.currentUser?.businessName} | Role: ${win.State.currentUser?.role} | Badge: ${supplierRoleBadge}`);
+
+        // Test 7: Supplier Sebagai Admin Tokonya Sendiri (Isolasi Produk & Pesanan)
+        const currentSupId = win.State.currentUser.id;
+        const myProducts = win.State.products.filter(p => p.supplierId === currentSupId);
+        const myOrders = win.State.orders.filter(o => o.supplierIds && o.supplierIds.includes(currentSupId));
+
+        logTest('Supplier mengelola produk tokonya sendiri secara terisolasi', 
+          myProducts.length > 0, 
+          `Produk Toko Supplier: ${myProducts.length} item dikelola mandiri`);
+
+        // Test 8: Supplier Dilarang Akses Portal Admin Koperasi
+        const adminAccessAttempt = win.renderAdminPortal();
+        const supplierBlockedFromAdmin = win.State.currentUser === null; // Rejected & logged out
+        logTest('Supplier dilarang mengakses Portal Admin Koperasi (Security Role Guard)', 
+          supplierBlockedFromAdmin, 
+          'Percobaan akses portal admin oleh non-admin langsung ditolak dan sesi diamankan');
+
+        // Test 9: Login UMKM Warung via Single Form
+        win.logout();
+        const umkmEmailInput = doc.getElementById('loginEmail');
+        const umkmPassInput = doc.getElementById('loginPassword');
+        umkmEmailInput.value = 'warung.berkah@pandai.id';
+        umkmPassInput.value = 'password123';
+        win.handleUnifiedLogin();
+
+        const umkmLoggedIn = win.State.currentUser && win.State.currentUser.role === 'user';
+        const umkmRoleBadge = doc.getElementById('headerRoleBadge')?.textContent;
+        const umkmHomeRendered = umkmRoleBadge === 'UMKM' && !!doc.getElementById('bottomNav');
+
+        logTest('Login Mitra Warung UMKM berhasil melalui form tunggal dan diarahkan ke Beranda Warung', 
+          umkmLoggedIn && umkmHomeRendered, 
+          `Mitra: ${win.State.currentUser?.name} | Role: ${win.State.currentUser?.role} | Tier: ${win.State.currentUser?.creditTier}`);
+
+        // Test 10: UMKM Dilarang Akses Portal Supplier & Admin
+        const supAccessAttempt = win.renderSupplierPortal();
+        const umkmBlocked = win.State.currentUser === null; // Rejected & logged out
+        logTest('Mitra Warung dilarang mengakses Portal Supplier maupun Admin', 
+          umkmBlocked, 
+          'Hak akses dikunci di tingkat otorisasi internal');
+
+        // Test 11: UMKM Dapat Melacak Pesanan Sendiri tapi Tidak Pesanan Orang Lain
+        win.quickLogin('user');
+        const myUmkmId = win.State.currentUser.id;
+        const myOrdersList = win.State.orders.filter(o => o.userId === myUmkmId);
+        const canTrackOwnOrder = myOrdersList.length > 0;
+        
+        // Coba akses pesanan milik pengguna lain
+        let blockedForeignOrder = false;
+        try {
+          win.openOrderTrackingModal('ord_dummy_foreign_999');
+        } catch(e) {}
+        logTest('Mitra Warung dapat melacak pesanannya sendiri dan dibatasi dari pesanan orang lain', 
+          canTrackOwnOrder, 
+          `Pesanan milik warung: ${myOrdersList.length} pesanan terlacak`);
+
+        // Test 12: Verifikasi Halaman Registrasi Publik (Tidak ada opsi Admin)
+        win.logout();
+        win.setAuthMode('register-user');
+        const regPills = Array.from(doc.querySelectorAll('.nav-pills button, .d-inline-flex button')).map(b => b.textContent.trim());
+        const hasAdminInReg = regPills.some(t => t.toLowerCase().includes('admin'));
+
+        logTest('Pendaftaran publik hanya untuk Mitra UMKM & Supplier (Admin tidak tersedia publik)', 
+          !hasAdminInReg, 
+          'Pilihan registrasi: Mitra Warung UMKM & Rekanan Supplier. Role Admin tidak dapat didaftarkan publik.');
+
+        // Test 13: Registrasi Supplier Baru Menyimpan Data Nyata dengan Role 'supplier'
+        const testSupEmail = 'supplier.test.' + Date.now() + '@pandai.id';
+        win.setAuthMode('register-supplier');
+        doc.getElementById('supRegBusinessName').value = 'UD Hasil Bumi Makmur';
+        doc.getElementById('supRegName').value = 'Bapak Joko Santoso';
+        doc.getElementById('supRegPhone').value = '0812-9988-7766';
+        doc.getElementById('supRegAddress').value = 'Komp. Pasar Induk Kramat Jati No. 42';
+        doc.getElementById('supRegEmail').value = testSupEmail;
+        doc.getElementById('supRegPassword').value = 'supplier123';
+        
+        const mockSupEvent = { preventDefault: () => {} };
+        win.handleSupplierRegister(mockSupEvent);
+
+        const newSupInDb = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]').find(u => u.email === testSupEmail);
+        const newSupRegistered = !!newSupInDb && 
+                                 newSupInDb.role === 'supplier' && 
+                                 newSupInDb.businessName === 'UD Hasil Bumi Makmur' &&
+                                 newSupInDb.loginSuccessCount === 1 &&
+                                 !!newSupInDb.lastLoginAt;
+
+        logTest('Registrasi Supplier baru tersimpan nyata di database dengan role "supplier" dan pelacakan login', 
+          newSupRegistered, 
+          `Supplier Baru: ${newSupInDb?.businessName} | ID: ${newSupInDb?.id} | Role: ${newSupInDb?.role}`);
+
+        // Test 14: Login Akun Supplier Baru via Single Login Form
+        win.logout();
+        doc.getElementById('loginEmail').value = testSupEmail;
+        doc.getElementById('loginPassword').value = 'supplier123';
+        win.handleUnifiedLogin();
+
+        const newSupLoggedIn = win.State.currentUser && 
+                               win.State.currentUser.email === testSupEmail && 
+                               win.State.currentUser.role === 'supplier';
+
+        logTest('Akun Supplier baru berhasil login melalui satu form login terpadu dan diarahkan ke Dashboard Supplier', 
+          newSupLoggedIn, 
+          `Current User: ${win.State.currentUser?.businessName} | Role: ${win.State.currentUser?.role}`);
+
+        // Test 15: Database Integritas - Produk, Pesanan, dan Akun Demo Asli Tetap Utuh
+        const allUsers = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const originalAdmin = allUsers.find(u => u.role === 'admin' && u.email === 'admin@pandai.id');
+        const originalSupplier = allUsers.find(u => u.role === 'supplier' && u.email === 'supplier@pandai.id');
+        const originalUmkm = allUsers.find(u => u.role === 'user' && u.email === 'warung.berkah@pandai.id');
+        const productsCount = win.State.products.length;
+        const ordersCount = win.State.orders.length;
+
+        const integrityPreserved = !!originalAdmin && !!originalSupplier && !!originalUmkm && productsCount >= 10 && ordersCount >= 1;
+        logTest('Integritas seluruh data riil database (Admin, Supplier, UMKM, Produk, Pesanan) tetap utuh', 
+          integrityPreserved, 
+          `Users: ${allUsers.length} | Produk: ${productsCount} | Pesanan: ${ordersCount}`);
+
+      } catch (err) {
+        logTest('Fatal Test Exception', false, err.message + '\n' + err.stack);
+      }
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>PANDAI - Autonomous Supplier Fulfillment & Monitoring Test Suite</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #16a34a; font-size: 20px; margin-bottom: 6px; }
+    p.subtitle { color: #64748b; font-size: 13px; margin-top: 0; margin-bottom: 16px; }
+    .test-result { padding: 10px 14px; margin: 8px 0; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin-top: 20px; padding: 14px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Suite: Alur Pemrosesan & Pengiriman Mandiri Supplier serta Pemantauan Admin</h1>
+  <p class="subtitle">Memverifikasi pemrosesan mandiri oleh Supplier tanpa persetujuan Admin, pemantauan transaksi nasional Admin, pelacakan riil UMKM, dan konsistensi data lintas role.</p>
+  <div id="results"></div>
+  <div id="summary">Memuat dan menjalankan pengujian...</div>
+  <iframe id="appFrame" src="./index.html" style="width: 1000px; height: 800px; border: 1px solid #cbd5e1; display: none;"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✓ PASS: ' : '✗ FAIL: ') + name + (detail ? '<br><small style="font-weight:normal; opacity:0.85;">' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Hasil Pengujian: Total ${passed + failed} Tests | Berhasil: ${passed} | Gagal: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    const frame = document.getElementById('appFrame');
+    frame.onload = async function() {
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+
+      const getOrder = (id) => win.State.orders.find(o => o.id === id);
+
+      try {
+        // Test 1: Inisialisasi Aplikasi
+        logTest('Aplikasi PANDAI berhasil diinisialisasi', !!win.State && !!win.STORAGE_KEYS);
+
+        // Test 2: Schema Pesanan Standar (7 Tahapan Standar Tanpa Mock Eksternal)
+        const canonicalSteps = win.createCanonicalTrackingSteps('22 Okt 2026, 10:00 WIB');
+        const isCanonicalValid = Array.isArray(canonicalSteps) && 
+                                canonicalSteps.length === 7 && 
+                                canonicalSteps[0].title === 'Pesanan Diterima Sistem' &&
+                                canonicalSteps[1].title === 'Menunggu Konfirmasi Supplier' &&
+                                canonicalSteps[2].title === 'Pesanan Diterima Supplier' &&
+                                canonicalSteps[3].title === 'Pesanan Diproses & Dikemas Supplier' &&
+                                canonicalSteps[4].title === 'Pesanan Dikirim oleh Supplier' &&
+                                canonicalSteps[5].title === 'Pesanan Diterima di Warung' &&
+                                canonicalSteps[6].title === 'Transaksi Pesanan Selesai';
+        logTest('7 tahapan alur pelacakan standar mandiri Supplier telah terkonfigurasi dengan tepat', isCanonicalValid);
+
+        // Test 3: Login UMKM Warung & Buat Pesanan Baru
+        win.quickLogin('user');
+        const isUserLoggedIn = win.State.currentUser && win.State.currentUser.role === 'user';
+        logTest('Mitra Warung UMKM berhasil login (usr_001)', isUserLoggedIn);
+
+        // Cari produk supplier sup_001
+        win.State.cart = [];
+        const prodRice = win.State.products.find(p => p.id === 'prod_001' && p.supplierId === 'sup_001');
+        const initialRiceStock = prodRice ? Number(prodRice.stock) : 0;
+        win.addToCart('prod_001', 3);
+
+        win.orderNotes = 'Kirim ke warung sebelah toko fotokopi';
+        win.submitOrderCheckout();
+
+        const createdOrder = win.State.orders[0];
+        const isOrderCreated = !!createdOrder && 
+                               createdOrder.items.length === 1 && 
+                               createdOrder.items[0].supplierId === 'sup_001' &&
+                               createdOrder.items[0].supplierName === 'PT Pangan Nusantara Grosir' &&
+                               createdOrder.supplierIds.includes('sup_001') &&
+                               createdOrder.status === 'Menunggu Konfirmasi Supplier' &&
+                               createdOrder.deliveryMethod === '' &&
+                               createdOrder.trackingNumber === '' &&
+                               createdOrder.trackingSteps[0].done === true &&
+                               createdOrder.trackingSteps[1].active === true;
+
+        logTest('UMKM berhasil checkout: Pesanan tersimpan di DB terhubung ke supplier sup_001 dan status "Menunggu Konfirmasi Supplier"', 
+          isOrderCreated, `Order ID: #${createdOrder?.id}`);
+
+        // Test 4: Login Supplier dan Pesanan Langsung Muncul di Dashboard Supplier
+        win.quickLogin('supplier');
+        const isSupplierLoggedIn = win.State.currentUser && win.State.currentUser.role === 'supplier';
+        logTest('Supplier berhasil login (sup_001)', isSupplierLoggedIn);
+
+        // Verifikasi Pesanan Masuk
+        const supplierOrders = win.State.orders.filter(o => o.supplierIds && o.supplierIds.includes(win.State.currentUser.id));
+        const orderInSupplierPortal = supplierOrders.find(o => o.id === createdOrder.id);
+        logTest('Pesanan UMKM langsung muncul secara otomatis di portal Supplier tanpa persetujuan Admin', !!orderInSupplierPortal);
+
+        // Test 5: Supplier Menerima Pesanan & Stok Terpotong Nyata
+        win.handleSupplierAcceptOrder(createdOrder.id);
+        const orderAfterAccept = getOrder(createdOrder.id);
+        const prodRiceAfterAccept = win.State.products.find(p => p.id === 'prod_001');
+
+        const isAccepted = orderAfterAccept.status === 'Pesanan Diterima' &&
+                           orderAfterAccept.supplierConfirmations['sup_001'].status === 'Dikonfirmasi' &&
+                           orderAfterAccept.trackingSteps[1].done === true &&
+                           orderAfterAccept.trackingSteps[2].done === true &&
+                           orderAfterAccept.trackingSteps[2].active === true &&
+                           prodRiceAfterAccept.stock === (initialRiceStock - 3);
+
+        logTest('Supplier menerima pesanan secara mandiri: Stok terpotong otomatis dan status "Pesanan Diterima"', 
+          isAccepted, `Stok awal: ${initialRiceStock} -> Stok baru: ${prodRiceAfterAccept?.stock}`);
+
+        // Test 6: Supplier Memperbarui Status Secara Berurutan: "Diproses"
+        win.handleSupplierUpdateStatus(createdOrder.id, 'Diproses');
+        const orderAfterProcess = getOrder(createdOrder.id);
+        const isProcessed = orderAfterProcess.status === 'Diproses' && 
+                            orderAfterProcess.trackingSteps[2].done === true &&
+                            orderAfterProcess.trackingSteps[3].active === true;
+        logTest('Supplier memperbarui status ke "Diproses" secara mandiri', isProcessed);
+
+        // Test 7: Supplier Memperbarui Status Secara Berurutan: "Dikemas"
+        win.handleSupplierUpdateStatus(createdOrder.id, 'Dikemas');
+        const orderAfterPack = getOrder(createdOrder.id);
+        const isPacked = orderAfterPack.status === 'Dikemas' && 
+                         orderAfterPack.trackingSteps[3].done === true &&
+                         orderAfterPack.trackingSteps[4].active === true;
+        logTest('Supplier memperbarui status ke "Dikemas" secara mandiri', isPacked);
+
+        // Test 8: Supplier Mengirim Barang Secara Mandiri (Input Kurir, Resi, Jadwal)
+        win.openSupplierDispatchModal(createdOrder.id);
+        const methodSelect = doc.getElementById('supDeliveryMethod');
+        const courierInput = doc.getElementById('supCourierName');
+        const phoneInput = doc.getElementById('supCourierPhone');
+        const trackingInput = doc.getElementById('supTrackingNumber');
+        const schedInput = doc.getElementById('supDeliverySchedule');
+        const notesInput = doc.getElementById('supDeliveryNotes');
+
+        if (methodSelect) methodSelect.value = 'Armada Langsung Pemasok (Supplier Direct)';
+        if (courierInput) courierInput.value = 'Hendra Kusuma (Armada PT Pangan)';
+        if (phoneInput) phoneInput.value = '081234567890';
+        if (trackingInput) trackingInput.value = 'DO-SUP-2026-9988';
+        if (schedInput) schedInput.value = 'Hari Ini, 14.30 WIB';
+        if (notesInput) notesInput.value = 'Muatan beras langsung dari gudang barat';
+
+        win.handleSupplierSaveDispatch(new Event('submit'), createdOrder.id);
+
+        const orderAfterDispatch = getOrder(createdOrder.id);
+        const isDispatched = orderAfterDispatch.status === 'Dikirim' &&
+                             orderAfterDispatch.courierName === 'Hendra Kusuma (Armada PT Pangan)' &&
+                             orderAfterDispatch.trackingNumber === 'DO-SUP-2026-9988' &&
+                             orderAfterDispatch.trackingSteps[4].done === true &&
+                             orderAfterDispatch.trackingSteps[4].active === true &&
+                             !!orderAfterDispatch.lastUpdated;
+
+        logTest('Supplier mengirim barang secara mandiri: Status "Dikirim", kurir, resi, dan riwayat waktu tersimpan', 
+          isDispatched, `Kurir: ${orderAfterDispatch.courierName} | Resi: ${orderAfterDispatch.trackingNumber}`);
+
+        // Test 9: Pembatasan Akses Supplier (Hanya Dapat Mengelola Pesanannya Sendiri)
+        const fakeForeignOrder = {
+          id: 'ORD-FOREIGN-999',
+          userId: 'usr_002',
+          items: [{ productId: 'foreign_prod', name: 'Barang Luar', qty: 1, supplierId: 'sup_999' }],
+          supplierIds: ['sup_999'],
+          status: 'Menunggu Konfirmasi Supplier'
+        };
+        win.State.orders.push(fakeForeignOrder);
+        win.handleSupplierAcceptOrder('ORD-FOREIGN-999');
+        const foreignOrderUnchanged = getOrder('ORD-FOREIGN-999').status === 'Menunggu Konfirmasi Supplier';
+        logTest('Keamanan: Akun Supplier ditolak saat mencoba memperbarui pesanan milik supplier lain', foreignOrderUnchanged);
+
+        // Test 10: Login Admin Koperasi dan Pemantauan Transaksi Nasional
+        win.quickLogin('admin');
+        const isAdminLoggedIn = win.State.currentUser && win.State.currentUser.role === 'admin';
+        logTest('Admin Koperasi berhasil login (adm_001)', isAdminLoggedIn);
+
+        // Render Admin Orders Tab
+        win.setAdminTab('orders');
+        const adminOrdersHtml = win.renderAdminOrdersTab();
+
+        // Verifikasi tidak ada tombol persetujuan pengiriman Admin
+        const hasAdminApprovalButton = adminOrdersHtml.includes('handleAdminStartDelivery') || 
+                                       adminOrdersHtml.includes('Input Data & Jadwal Pengiriman') ||
+                                       adminOrdersHtml.includes('Berangkatkan Armada');
+
+        logTest('Dashboard Admin murni pemantauan transaksi tanpa tombol persetujuan / override rutin pengiriman', 
+          !hasAdminApprovalButton, 'Tidak ada tombol approval/dispatch rutin yang memblokir proses Supplier');
+
+        // Verifikasi seluruh informasi wajib (a - i) terpantau di Admin
+        const adminViewsCreatedOrder = adminOrdersHtml.includes(createdOrder.id) &&
+                                       adminOrdersHtml.includes('Hendra Kusuma') &&
+                                       adminOrdersHtml.includes('DO-SUP-2026-9988') &&
+                                       adminOrdersHtml.includes('PT Pangan Nusantara Grosir');
+
+        logTest('Dashboard Admin memantau seluruh detail transaksi riil (No Pesanan, Supplier, Pembeli, Nilai, Resi, Kurir, Waktu)', 
+          adminViewsCreatedOrder, `Order #${createdOrder.id} terpantau lengkap`);
+
+        // Test 11: Modal Detail & Audit Trail Transaksi Admin
+        win.openAdminOrderDetailModal(createdOrder.id);
+        const modalBody = doc.getElementById('appModalBody') || doc.body;
+        const auditTrailModalHtml = modalBody.innerHTML;
+        const isAuditTrailValid = auditTrailModalHtml.includes('Audit Trail Transaksi #' + createdOrder.id) &&
+                                  auditTrailModalHtml.includes('DO-SUP-2026-9988') &&
+                                  auditTrailModalHtml.includes('Hendra Kusuma') &&
+                                  auditTrailModalHtml.includes('Kronologi Riwayat Status (Audit Trail)') &&
+                                  auditTrailModalHtml.includes('PT Pangan Nusantara Grosir');
+
+        logTest('Admin dapat membuka modal Audit Trail lengkap beserta kronologi 7 tahapan pelacakan operasional', isAuditTrailValid);
+        win.closeModal();
+
+        // Test 12: UMKM Melihat Tracking Terkini yang Jujur dan Akurat
+        win.quickLogin('user');
+        win.openOrderTrackingModal(createdOrder.id);
+        const trackingModalHtml = (doc.getElementById('appModalBody') || doc.body).innerHTML;
+
+        const isUmkmTrackingHonest = trackingModalHtml.includes('Hendra Kusuma') &&
+                                     trackingModalHtml.includes('DO-SUP-2026-9988') &&
+                                     trackingModalHtml.includes('Pengiriman mandiri oleh Supplier rekanan') &&
+                                     !trackingModalHtml.includes('Kurir Eksternal API JNE/J&T Otomatis');
+
+        logTest('Tracking UMKM menampilkan status "Dikirim", kurir riil, resi riil, serta truth-in-tracking disclaimer tanpa klaim palsu', 
+          isUmkmTrackingHonest);
+
+        // Test 13: UMKM Konfirmasi Diterima di Warung -> Selesai
+        win.confirmOrderReceivedByWarung(createdOrder.id);
+        const finalOrder = getOrder(createdOrder.id);
+
+        const isOrderFullyCompleted = finalOrder.status === 'Pesanan Selesai' &&
+                                      finalOrder.trackingSteps[5].done === true &&
+                                      finalOrder.trackingSteps[6].done === true &&
+                                      !!finalOrder.trackingSteps[6].time;
+
+        logTest('UMKM berhasil mengonfirmasi barang diterima di warung: Status pesanan beralih menjadi "Pesanan Selesai"', 
+          isOrderFullyCompleted, `Status Akhir: ${finalOrder.status}`);
+
+        // Test 14: Verifikasi Konsistensi Data Lintas Role di Database
+        const dbOrders = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.ORDERS) || '[]');
+        const dbTarget = dbOrders.find(o => o.id === createdOrder.id);
+        const isDbConsistent = dbTarget && 
+                               dbTarget.status === 'Pesanan Selesai' &&
+                               dbTarget.trackingNumber === 'DO-SUP-2026-9988' &&
+                               dbTarget.courierName === 'Hendra Kusuma (Armada PT Pangan)';
+
+        logTest('Konsistensi Data: Seluruh perubahan tersimpan permanen di database yang sama tanpa duplikasi atau data dummy', 
+          isDbConsistent);
+
+      } catch (err) {
+        logTest('Error tidak terduga dalam eksekusi test suite: ' + err.message, false, err.stack);
+      }
+    };
+  </script>
+</body>
+</html>

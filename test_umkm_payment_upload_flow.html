@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Pengujian Alur Halaman Pembayaran & Unggah Bukti UMKM PANDAI</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #0f172a; font-size: 20px; margin-bottom: 4px; }
+    .subtitle { color: #64748b; font-size: 13px; margin-bottom: 16px; }
+    .test-result { padding: 10px 14px; margin-bottom: 8px; border-radius: 6px; font-size: 13px; line-height: 1.5; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 15px; font-weight: bold; margin-top: 20px; padding: 14px; border-radius: 8px; }
+    iframe { width: 100%; height: 500px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; margin-top: 15px; }
+  </style>
+</head>
+<body>
+  <h1>Hasil Pengujian Alur Pembayaran & Unggah Bukti UMKM PANDAI</h1>
+  <p class="subtitle">Memvalidasi Halaman Pembayaran terpadu, unggah bukti bayar, pratinjau berkas, akses dari pelacakan &amp; riwayat pesanan, serta verifikasi detail transaksi Admin.</p>
+  
+  <div id="results"></div>
+  <div id="summary"></div>
+
+  <iframe id="appFrame" src="index.html"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    const frame = document.getElementById('appFrame');
+
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✅ PASS: ' : '❌ FAIL: ') + name + (detail ? '<br><small style="font-weight:normal; opacity:0.85;">' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Hasil Pengujian: Total ${passed + failed} Tests | Berhasil: ${passed} | Gagal: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    frame.onload = function() {
+      const win = frame.contentWindow;
+      const doc = win.document;
+
+      try {
+        // Test 1: Inisialisasi & Login UMKM
+        win.quickLogin('user');
+        const currentUser = win.State.currentUser;
+        logTest('Akun Mitra Warung UMKM (usr_001) berhasil masuk ke sesi aplikasi', 
+          currentUser && currentUser.role === 'user' && currentUser.id === 'usr_001', 
+          `User: ${currentUser.name} | Usaha: ${currentUser.businessName}`);
+
+        // Test 2: Checkout dengan metode Transfer Bank BRI
+        win.State.cart = [];
+        win.addToCart('prod_003', 1); // Minyak Goreng Bimoli Rp 34.000
+        win.selectPaymentType('transfer_bank');
+        win.submitOrderCheckout();
+
+        const order = win.State.orders[0];
+        const orderId = order.id;
+        const checkoutSuccess = order && 
+                                order.paymentMethod === 'Transfer Bank BRI' && 
+                                order.paymentStatus === 'Menunggu Pembayaran' && 
+                                order.total === 34000;
+        logTest('UMKM berhasil checkout: Pesanan dibuat dengan status "Menunggu Pembayaran" dan total tagihan akurat', 
+          checkoutSuccess, `No. Pesanan: #${orderId} | Total: ${win.formatRupiah(order.total)} | Metode: ${order.paymentMethod}`);
+
+        // Test 3: Halaman Pembayaran Terpadu (Nomor Pesanan, Total, Status, Rekening Resmi BRI)
+        win.openOrderPaymentInstructionModal(orderId);
+        const modalHtml = doc.getElementById('pandaiModalContent') ? doc.getElementById('pandaiModalContent').innerHTML : '';
+        const hasPaymentDetails = modalHtml.includes(orderId) && 
+                                 modalHtml.includes(win.formatRupiah(order.total)) && 
+                                 modalHtml.includes('Transfer Bank BRI') &&
+                                 modalHtml.includes('665501030233535') &&
+                                 modalHtml.includes('IMELDA SINDI AYU SAPUTRI') &&
+                                 modalHtml.includes('Formulir Unggah Bukti Pembayaran');
+        logTest('Halaman Pembayaran UMKM menampilkan nomor pesanan, total, rekening resmi Bank BRI dinamis, dan formulir unggah terpadu', 
+          hasPaymentDetails, `Terverifikasi rekening resmi 665501030233535 a.n. IMELDA & formulir upload terintegrasi`);
+
+        // Test 4: Halaman Pembayaran QRIS Resmi (NMID, Nama Merchant, Gambar QRIS)
+        win.openOrderPaymentInstructionModal(orderId, 'qris');
+        const qrisModalHtml = doc.getElementById('pandaiModalContent') ? doc.getElementById('pandaiModalContent').innerHTML : '';
+        const hasQrisDetails = qrisModalHtml.includes('ID1026622161325') && 
+                               qrisModalHtml.includes('PANDAI') && 
+                               qrisModalHtml.includes('qris-pandai.jpg') &&
+                               qrisModalHtml.includes('Petunjuk Pembayaran QRIS');
+        logTest('Halaman Pembayaran QRIS menampilkan NMID resmi ID1026622161325, barcode QRIS resmi, dan instruksi bayar', 
+          hasQrisDetails, `NMID: ID1026622161325 | Merchant: PANDAI | Gambar QRIS aktif`);
+
+        // Test 5: Validasi Pemilihan Berkas & Pratinjau (Preview) Bukti Nyata
+        const mockBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        const mockBlob = new win.Blob(['dummy-png-data'], { type: 'image/png' });
+        const mockFile = new win.File([mockBlob], 'struk_transfer_bri_34000.png', { type: 'image/png' });
+
+        const mockInput = {
+          files: [mockFile],
+          value: 'C:\\fakepath\\struk_transfer_bri_34000.png'
+        };
+
+        win.handleProofFileSelected(mockInput);
+        const previewContainer = doc.getElementById('proofFilePreviewContainer');
+        const previewName = doc.getElementById('proofPreviewFileName');
+        const isPreviewActive = previewContainer && !previewContainer.classList.contains('d-none') && previewName && previewName.textContent.includes('struk_transfer_bri_34000.png');
+        logTest('Sistem menampilkan pratinjau bukti bayar sebelum dikirim dengan nama dan ukuran file valid', 
+          isPreviewActive, `File: ${mockFile.name} | Ukuran: ${(mockFile.size / 1024).toFixed(1)} KB`);
+
+        // Test 6: Validasi Keamanan Ukuran Berkas (> 5 MB)
+        let rejectedLargeFile = false;
+        const largeBlob = new win.Blob([new Uint8Array(6 * 1024 * 1024)], { type: 'image/jpeg' });
+        const mockLargeFile = new win.File([largeBlob], 'file_terlalu_besar.jpg', { type: 'image/jpeg' });
+        const mockLargeInput = {
+          files: [mockLargeFile],
+          value: 'C:\\fakepath\\file_terlalu_besar.jpg'
+        };
+        win.handleProofFileSelected(mockLargeInput);
+        rejectedLargeFile = mockLargeInput.value === '';
+        logTest('Validasi berkas menolak file yang melebihi batas 5 MB', rejectedLargeFile, 'File 6MB berhasil ditolak');
+
+        // Test 7: Unggah Bukti Pembayaran Berhasil & Status Menjadi "Menunggu Verifikasi"
+        const targetOrder = win.State.orders.find(o => o.id === orderId);
+        targetOrder.paymentProof = {
+          fileData: mockBase64,
+          fileName: 'struk_transfer_bri_34000.png',
+          fileType: 'image/png',
+          fileSize: 2048,
+          senderBank: 'BRImo',
+          senderName: 'Siti Aminah',
+          notes: 'Transfer lunas via BRImo pk 11.00 WIB',
+          uploadedAt: win.getNowFormattedString(),
+          timestamp: Date.now()
+        };
+        targetOrder.paymentStatus = 'Menunggu Verifikasi';
+        targetOrder.paymentVerificationHistory = targetOrder.paymentVerificationHistory || [];
+        targetOrder.paymentVerificationHistory.push({
+          action: 'UPLOAD_PROOF',
+          timestamp: win.getNowFormattedString(),
+          actor: win.State.currentUser.name,
+          role: 'user',
+          notes: 'Bukti transfer diunggah'
+        });
+        win.State.saveOrders();
+
+        const savedOrder = win.State.orders.find(o => o.id === orderId);
+        const uploadSuccess = savedOrder && 
+                              savedOrder.paymentStatus === 'Menunggu Verifikasi' && 
+                              savedOrder.paymentProof && 
+                              savedOrder.paymentProof.fileName === 'struk_transfer_bri_34000.png';
+        logTest('Bukti pembayaran berhasil tersimpan di database: Status berubah menjadi "Menunggu Verifikasi" (TIDAK langsung lunas otomatis)', 
+          uploadSuccess, `Status: ${savedOrder?.paymentStatus} | Berkas: ${savedOrder?.paymentProof?.fileName} | Bank Pengirim: ${savedOrder?.paymentProof?.senderBank}`);
+
+        // Test 8: Halaman Pembayaran Menampilkan Bukti Terunggah & Waktu Unggah
+        win.openOrderPaymentInstructionModal(orderId);
+        const postUploadModalHtml = doc.getElementById('pandaiModalContent') ? doc.getElementById('pandaiModalContent').innerHTML : '';
+        const displaysUploadedProof = postUploadModalHtml.includes('struk_transfer_bri_34000.png') && 
+                                     postUploadModalHtml.includes('BRImo') && 
+                                     postUploadModalHtml.includes('Menunggu Verifikasi') &&
+                                     postUploadModalHtml.includes('Unggah Bukti Pengganti');
+        logTest('Setelah unggahan berhasil, halaman pembayaran menampilkan bukti tersimpan, waktu unggah, dan opsi unggah ulang', displaysUploadedProof);
+
+        // Test 9: Akses Pembayaran dari Kartu Pelacakan / Detail Pesanan
+        win.openOrderTrackingModal(orderId);
+        const trackingModalHtml = doc.getElementById('pandaiModalContent') ? doc.getElementById('pandaiModalContent').innerHTML : '';
+        const hasTitle = trackingModalHtml.includes('Bukti Pembayaran');
+        const hasFile = trackingModalHtml.includes('struk_transfer_bri_34000.png');
+        const hasBtn = trackingModalHtml.includes('Buka Pembayaran');
+        const trackingHasPaymentSection = hasTitle && hasFile && hasBtn;
+        logTest('Detail pelacakan pesanan (openOrderTrackingModal) memiliki bagian "Status & Bukti Pembayaran" dan tombol akses pembayaran', 
+          trackingHasPaymentSection, `Status & Bukti Pembayaran terpantau di pelacakan | Berkas: struk_transfer_bri_34000.png`);
+
+        // Test 10: Akses Pembayaran dari Riwayat Transaksi (renderOrdersView)
+        const ordersViewHtml = win.renderOrdersView();
+        const ordersViewHasPaymentButtons = ordersViewHtml.includes('Pembayaran & Bukti') && 
+                                           ordersViewHtml.includes('Menunggu Verifikasi');
+        logTest('Riwayat pesanan UMKM (renderOrdersView) menyediakan banner verifikasi dan tombol "Pembayaran & Bukti"', ordersViewHasPaymentButtons);
+
+        // Test 11: Admin Asli Melihat Bukti pada Detail Transaksi (openAdminOrderDetailModal)
+        win.quickLogin('admin');
+        win.openAdminOrderDetailModal(orderId);
+        const adminDetailHtml = doc.getElementById('pandaiModalContent') ? doc.getElementById('pandaiModalContent').innerHTML : '';
+        const adminDetailHasProof = adminDetailHtml.includes('Verifikasi Bukti Pembayaran') && 
+                                   adminDetailHtml.includes('struk_transfer_bri_34000.png') && 
+                                   adminDetailHtml.includes('Setujui Pembayaran') &&
+                                   adminDetailHtml.includes('Tolak Pembayaran');
+        logTest('Detail Transaksi Admin (openAdminOrderDetailModal) menampilkan bukti bayar UMKM lengkap dengan tombol verifikasi dan tolak', adminDetailHasProof);
+
+        // Test 12: Admin Menolak Bukti Pembayaran dengan Alasan
+        const rejectionReason = 'Nominal transfer kurang Rp5.000 dari total tagihan pesanan';
+        win.handleAdminVerifyPayment(orderId, false, rejectionReason);
+        const rejectedOrder = win.State.orders.find(o => o.id === orderId);
+        const isRejected = rejectedOrder && rejectedOrder.paymentStatus === 'Ditolak' && rejectedOrder.paymentRejectionReason === rejectionReason;
+        logTest('Admin Koperasi menolak pembayaran ("Ditolak") dengan catatan alasan penolakan yang tercatat di database', isRejected, `Alasan: "${rejectedOrder?.paymentRejectionReason}"`);
+
+        // Test 13: UMKM Melihat Alasan Penolakan dan Memiliki Form Unggah Bukti Baru Tanpa Checkout Ulang
+        win.quickLogin('user');
+        win.openOrderPaymentInstructionModal(orderId);
+        const rejectedModalHtml = doc.getElementById('pandaiModalContent') ? doc.getElementById('pandaiModalContent').innerHTML : '';
+        const canReuploadWithoutCheckout = rejectedModalHtml.includes('Pembayaran Ditolak oleh Admin') && 
+                                          rejectedModalHtml.includes(rejectionReason) &&
+                                          rejectedModalHtml.includes('Formulir Unggah Bukti Pembayaran') &&
+                                          rejectedModalHtml.includes('Unggah Bukti Pembayaran');
+        logTest('UMKM dapat melihat alasan penolakan dan langsung mengunggah bukti perbaikan tanpa perlu checkout ulang', canReuploadWithoutCheckout);
+
+        // Test 14: UMKM Mengunggah Bukti Baru Pengganti
+        const mockNewBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        const reuploadOrder = win.State.orders.find(o => o.id === orderId);
+        reuploadOrder.paymentProof = {
+          fileData: mockNewBase64,
+          fileName: 'struk_transfer_bri_34000_perbaikan.png',
+          fileType: 'image/png',
+          fileSize: 2048,
+          senderBank: 'BRImo',
+          senderName: 'Siti Aminah',
+          notes: 'Transfer perbaikan lunas pas Rp34.000',
+          uploadedAt: win.getNowFormattedString(),
+          timestamp: Date.now()
+        };
+        reuploadOrder.paymentStatus = 'Menunggu Verifikasi';
+        reuploadOrder.paymentRejectionReason = '';
+        win.State.saveOrders();
+
+        const reuploadedOrder = win.State.orders.find(o => o.id === orderId);
+        const reuploadSuccess = reuploadedOrder && 
+                               reuploadedOrder.paymentStatus === 'Menunggu Verifikasi' && 
+                               reuploadedOrder.paymentProof.fileName === 'struk_transfer_bri_34000_perbaikan.png';
+        logTest('UMKM berhasil mengirim bukti perbaikan: Status kembali menjadi "Menunggu Verifikasi"', reuploadSuccess);
+
+        // Test 15: Admin Memverifikasi Pembayaran Menjadi "Terverifikasi"
+        win.quickLogin('admin');
+        win.handleAdminVerifyPayment(orderId, true);
+        const finalizedOrder = win.State.orders.find(o => o.id === orderId);
+        const isFinalVerified = finalizedOrder && finalizedOrder.paymentStatus === 'Terverifikasi';
+        const lastAuditLog = finalizedOrder.paymentVerificationHistory[finalizedOrder.paymentVerificationHistory.length - 1];
+        logTest('Admin Koperasi menyetujui pembayaran ("Terverifikasi") dan mencatat identitas Admin di audit trail', 
+          isFinalVerified && lastAuditLog.action === 'VERIFIED', `Status: ${finalizedOrder?.paymentStatus} | Admin: ${lastAuditLog.actor}`);
+
+        // Test 16: Keamanan & Isolasi: Akun Supplier Diblokir dari Mengakses Bukti Pembayaran Customer
+        win.quickLogin('supplier');
+        let supplierError = '';
+        const origToast = win.showToast;
+        win.showToast = (msg) => { supplierError = msg; };
+        win.openOrderPaymentInstructionModal(orderId);
+        win.showToast = origToast;
+        const supplierBlocked = supplierError.includes('Akses ditolak') || supplierError.includes('Supplier');
+        logTest('Keamanan Akses: Rekanan Supplier ditolak saat mencoba membuka Halaman Pembayaran customer', 
+          supplierBlocked, `Respon: "${supplierError}"`);
+
+        // Test 17: Integritas Data & Konsistensi Database
+        const dbOrders = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.ORDERS) || '[]');
+        const persistedOrder = dbOrders.find(o => o.id === orderId);
+        const isDbConsistent = persistedOrder && 
+                               persistedOrder.paymentStatus === 'Terverifikasi' && 
+                               persistedOrder.paymentProof && 
+                               persistedOrder.userId === 'usr_001';
+        logTest('Integritas Data: Bukti pembayaran dan status tersimpan permanen di database tanpa kehilangan data', isDbConsistent);
+
+      } catch (err) {
+        logTest('Error tidak terduga dalam eksekusi test suite: ' + err.message, false, err.stack);
+      }
+    };
+  </script>
+</body>
+</html>

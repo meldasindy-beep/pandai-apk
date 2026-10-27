@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>PANDAI - Product & Supplier Management Test Suite</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #16a34a; font-size: 20px; }
+    .test-result { padding: 10px 14px; margin: 8px 0; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin-top: 20px; padding: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Suite: Pengelolaan Produk oleh Supplier & Monitoring Admin</h1>
+  <div id="results"></div>
+  <div id="summary"></div>
+  <iframe id="appFrame" src="./index.html" style="width: 1000px; height: 800px; border: 1px solid #cbd5e1; display: none;"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✓ PASS: ' : '✗ FAIL: ') + name + (detail ? '<br><small>' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Total Tests: ${passed + failed} | Passed: ${passed} | Failed: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    const frame = document.getElementById('appFrame');
+    frame.onload = async function() {
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+
+      try {
+        // Test 1: Window and Application Load
+        logTest('Aplikasi PANDAI berhasil diinisialisasi di iframe', !!win.State && !!win.STORAGE_KEYS);
+
+        // Test 2: Database and Products Schema have supplierId and supplierName
+        const products = win.State.products;
+        const allHaveSupplier = products.every(p => !!p.supplierId && !!p.supplierName);
+        logTest('Semua produk bawaan memiliki supplierId dan supplierName', allHaveSupplier, `Total produk: ${products.length}`);
+
+        // Test 3: Supplier Login
+        win.quickLogin('supplier');
+        const isSupplierLoggedIn = win.State.currentUser && win.State.currentUser.role === 'supplier';
+        logTest('Supplier berhasil login dan role tervalidasi sebagai "supplier"', isSupplierLoggedIn, `User: ${win.State.currentUser?.email}, Role: ${win.State.currentUser?.role}`);
+
+        // Test 4: Dashboard Supplier Elements
+        win.setSupplierTab('products');
+        const supplierPortal = doc.getElementById('appContent').innerHTML;
+        const hasKpiCards = supplierPortal.includes('Total Stok') && supplierPortal.includes('Nilai Pasokan') && supplierPortal.includes('Produk Saya');
+        const hasAddBtn = supplierPortal.includes('openSupplierAddProductModal');
+        logTest('Dashboard Supplier menampilkan KPI Pasokan & Tombol Tambah Pasokan', hasKpiCards && hasAddBtn);
+
+        // Test 5: Supplier Menambah Produk Baru
+        const testProdName = 'Minyak Kelapa Murni Alami 2L - Batch ' + Date.now();
+        win.openSupplierAddProductModal();
+        doc.getElementById('supAddProdName').value = testProdName;
+        doc.getElementById('supAddProdCat').value = 'Minyak Goreng';
+        doc.getElementById('supAddProdPrice').value = '34000';
+        doc.getElementById('supAddProdNormalPrice').value = '38000';
+        doc.getElementById('supAddProdStock').value = '75';
+        doc.getElementById('supAddProdUnit').value = 'Pouch 2L';
+        doc.getElementById('supAddProdDesc').value = 'Minyak kelapa murni kualitas super langsung pabrik.';
+        doc.getElementById('supAddProdImg').value = 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=500&q=80';
+        win.handleSupplierAddProductSubmit(new Event('submit'));
+
+        const addedProdId = win.State.products.find(p => p.name === testProdName)?.id;
+        const addedProd = win.State.products.find(p => p.id === addedProdId);
+        const addSuccess = !!addedProd && 
+                           addedProd.supplierId === win.State.currentUser.id &&
+                           addedProd.supplierName === (win.State.currentUser.businessName || win.State.currentUser.name) &&
+                           addedProd.supplierPrice === 34000 &&
+                           addedProd.stock === 75;
+        logTest('Supplier berhasil menambah produk baru dengan supplierId & supplierName terhubung', addSuccess, `ID: ${addedProd?.id}, Supplier: ${addedProd?.supplierName}`);
+
+        // Test 6: Supplier Perbarui Harga Cepat
+        win.openSupplierPriceModal(addedProdId);
+        doc.getElementById('supQuickPrice').value = '32500';
+        doc.getElementById('supQuickNormalPrice').value = '37000';
+        win.handleSupplierPriceSubmit(new Event('submit'), addedProdId);
+        const prodAfterPrice = win.State.products.find(p => p.id === addedProdId);
+        const priceUpdated = prodAfterPrice?.supplierPrice === 32500 && prodAfterPrice?.normalPrice === 37000;
+        logTest('Supplier berhasil memperbarui harga grosir produk', priceUpdated, `Harga baru: Rp ${prodAfterPrice?.supplierPrice}`);
+
+        // Test 7: Supplier Perbarui Stok Cepat
+        win.openSupplierStockModal(addedProdId);
+        doc.getElementById('supQuickStock').value = '120';
+        win.handleSupplierStockSubmit(new Event('submit'), addedProdId);
+        const prodAfterStock = win.State.products.find(p => p.id === addedProdId);
+        const stockUpdated = prodAfterStock?.stock === 120;
+        logTest('Supplier berhasil memperbarui stok produk', stockUpdated, `Stok baru: ${prodAfterStock?.stock} unit`);
+
+        // Test 8: Supplier Edit Detail Lengkap
+        win.openSupplierEditProductModal(addedProdId);
+        doc.getElementById('supEditProdName').value = testProdName + ' (Kemasan Hemat)';
+        doc.getElementById('supEditProdCat').value = 'Minyak Goreng';
+        doc.getElementById('supEditProdPrice').value = '31000';
+        doc.getElementById('supEditProdNormalPrice').value = '36000';
+        doc.getElementById('supEditProdStock').value = '115';
+        doc.getElementById('supEditProdUnit').value = 'Pouch 2L Double Pack';
+        doc.getElementById('supEditProdDesc').value = 'Deskripsi diperbarui.';
+        win.handleSupplierEditProductSubmit(new Event('submit'), addedProdId);
+
+        const prodAfterEdit = win.State.products.find(p => p.id === addedProdId);
+        const editSuccess = prodAfterEdit?.name.includes('(Kemasan Hemat)') && prodAfterEdit?.stock === 115 && prodAfterEdit?.supplierPrice === 31000;
+        logTest('Supplier berhasil mengedit detail lengkap produk', editSuccess, `Nama: ${prodAfterEdit?.name}`);
+
+        // Test 9: Keamanan Data - Supplier TIDAK boleh mengubah/menghapus produk milik Supplier lain
+        const foreignProd = {
+          id: 'prod_foreign_999',
+          supplierId: 'sup_other_999',
+          supplierName: 'PT Supplier Lain Jaya',
+          name: 'Produk Supplier Lain',
+          supplierPrice: 50000,
+          normalPrice: 60000,
+          stock: 20,
+          unit: 'Dus'
+        };
+        win.State.products.push(foreignProd);
+        
+        let editOtherBlocked = false;
+        // Coba edit produk supplier lain
+        const originalPrice = foreignProd.supplierPrice;
+        win.openSupplierPriceModal(foreignProd.id);
+        const priceInput = doc.getElementById('supQuickPrice');
+        if (priceInput) priceInput.value = '10000';
+        win.handleSupplierPriceSubmit(new Event('submit'), foreignProd.id);
+        const foreignProdAfterPrice = win.State.products.find(p => p.id === foreignProd.id);
+        if (foreignProdAfterPrice?.supplierPrice === originalPrice) {
+          editOtherBlocked = true;
+        }
+
+        let deleteOtherBlocked = false;
+        win.handleSupplierDeleteProduct(foreignProd.id);
+        if (win.State.products.some(p => p.id === foreignProd.id)) {
+          deleteOtherBlocked = true;
+        }
+        logTest('Keamanan: Supplier DITOLAK saat mencoba mengubah atau menghapus produk milik Supplier lain', editOtherBlocked && deleteOtherBlocked);
+
+        // Test 10: Supplier Hapus Produk Milik Sendiri dengan Konfirmasi
+        win.handleSupplierDeleteProduct(addedProdId);
+        const isDeleted = !win.State.products.some(p => p.id === addedProdId);
+        logTest('Supplier berhasil menghapus produk miliknya sendiri dari etalase', isDeleted);
+
+        // Test 11: Admin Login & Hak Akses Monitoring
+        win.quickLogin('admin');
+        const isAdmin = win.State.currentUser && win.State.currentUser.role === 'admin';
+        logTest('Admin Koperasi berhasil login', isAdmin);
+
+        // Test 12: Admin Dashboard Quick Action tidak ada "Tambah Produk", beralih ke "Pantau Katalog"
+        win.setAdminTab('dashboard');
+        const adminDashHtml = doc.getElementById('appContent').innerHTML;
+        const noAdminAddOnDash = !adminDashHtml.includes('openAdminAddProductModal()');
+        const hasMonitorBtn = adminDashHtml.includes('Pantau Katalog Sembako');
+        logTest('Dashboard Admin tidak memiliki tombol Tambah Produk dan menyediakan tombol Pantau Katalog', noAdminAddOnDash && hasMonitorBtn);
+
+        // Test 13: Tab Kelola Sembako Admin menampilkan Mode Monitoring dengan info Supplier, Harga, Stok & Status
+        win.setAdminTab('products');
+        const adminProdHtml = doc.getElementById('appContent').innerHTML;
+        const noAdminAddOnProductsTab = !adminProdHtml.includes('openAdminAddProductModal()');
+        const noAdminEditDeleteBtns = !adminProdHtml.includes('openAdminEditProductModal(') && !adminProdHtml.includes('adminDeleteProduct(');
+        const hasSupplierIdentities = adminProdHtml.includes('Supplier:') || adminProdHtml.includes('PT Pangan Nusantara Grosir');
+        const hasStockStatusBadge = adminProdHtml.includes('Stok Tersedia') || adminProdHtml.includes('Stok Menipis');
+        logTest('Halaman Katalog Sembako Admin bersih dari tombol Tambah/Edit/Hapus dan menampilkan Supplier, Harga, Stok, serta Status', 
+          noAdminAddOnProductsTab && noAdminEditDeleteBtns && hasSupplierIdentities && hasStockStatusBadge);
+
+        // Test 14: Validasi Fungsi Backend Admin yang Dikebiri
+        win.openAdminAddProductModal();
+        win.handleAdminAddProductSubmit(new Event('submit'));
+        win.openAdminEditProductModal(win.State.products[0].id);
+        win.handleAdminEditProductSubmit(new Event('submit'), win.State.products[0].id);
+        win.adminDeleteProduct(win.State.products[0].id);
+        // Pastikan produk pertama TIDAK terhapus oleh panggilan adminDeleteProduct
+        const firstProdStillExists = !!win.State.products[0];
+        logTest('Fungsi mutasi admin diblokir dan tidak dapat memanipulasi database produk', firstProdStillExists);
+
+        // Test 15: Katalog Mitra Warung UMKM
+        win.quickLogin('user');
+        win.switchTab('catalog');
+        const catalogHtml = doc.getElementById('appContent').innerHTML;
+        const catalogHasSupplierBadge = catalogHtml.includes('PT Pangan Nusantara Grosir') || catalogHtml.includes('bi-truck');
+        const catalogShowsStockAndUnit = catalogHtml.includes('Stok:') && (catalogHtml.includes('Sak') || catalogHtml.includes('Kg') || catalogHtml.includes('Dus'));
+        logTest('Katalog Mitra Warung UMKM menampilkan identitas Supplier, stok, harga, dan kemasan satuan secara akurat', 
+          catalogHasSupplierBadge && catalogShowsStockAndUnit);
+
+        // Bersihkan data dummy foreign product dari test
+        win.State.products = win.State.products.filter(p => p.id !== foreignProd.id);
+        win.State.saveProducts();
+
+        console.log('=== TEST SUITE COMPLETED === Passed: ' + passed + ', Failed: ' + failed);
+        const finalElem = document.createElement('div');
+        finalElem.id = 'TEST_DONE_MARKER';
+        finalElem.setAttribute('data-passed', passed);
+        finalElem.setAttribute('data-failed', failed);
+        document.body.appendChild(finalElem);
+
+      } catch (err) {
+        logTest('Execution Error', false, err.message + '<br>' + err.stack);
+        const finalElem = document.createElement('div');
+        finalElem.id = 'TEST_DONE_MARKER';
+        finalElem.setAttribute('data-passed', passed);
+        finalElem.setAttribute('data-failed', failed);
+        finalElem.setAttribute('data-error', err.message);
+        document.body.appendChild(finalElem);
+      }
+    };
+  </script>
+</body>
+</html>

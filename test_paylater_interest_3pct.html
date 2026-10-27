@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Test Suite - PayLater Revisi Bunga 3% Flat & Tenor P ANDAI</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background: #f8fafc; color: #1e293b; }
+    h1 { color: #16a34a; font-size: 20px; margin-bottom: 6px; }
+    p.subtitle { color: #64748b; font-size: 13px; margin-top: 0; margin-bottom: 16px; }
+    .test-result { padding: 10px 14px; margin: 8px 0; border-radius: 6px; font-family: monospace; font-size: 13px; }
+    .pass { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+    .fail { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; font-weight: bold; }
+    #summary { font-size: 16px; font-weight: bold; margin-top: 20px; padding: 14px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Test Suite: PayLater Revisi Bunga 3% Flat per Bulan & 4 Tenor P ANDAI</h1>
+  <p class="subtitle">Memvalidasi formula bunga flat 3%/bln, contoh pokok Rp100.000, 4 pilihan tenor, pembulatan integer rupiah, jadwal pembayaran, dan isolasi PayLater.</p>
+  <div id="results"></div>
+  <div id="summary">Memuat dan menjalankan pengujian...</div>
+
+  <iframe id="appFrame" src="./index.html" style="width: 1000px; height: 800px; border: 1px solid #cbd5e1; display: none;"></iframe>
+
+  <script>
+    const resultsDiv = document.getElementById('results');
+    const summaryDiv = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+
+    function logTest(name, isPass, detail = '') {
+      const div = document.createElement('div');
+      div.className = 'test-result ' + (isPass ? 'pass' : 'fail');
+      div.innerHTML = (isPass ? '✓ PASS: ' : '✗ FAIL: ') + name + (detail ? '<br><small style="font-weight:normal; opacity:0.85;">' + detail + '</small>' : '');
+      resultsDiv.appendChild(div);
+      if (isPass) passed++; else failed++;
+      summaryDiv.innerHTML = `<strong>Hasil Pengujian: Total ${passed + failed} Tests | Berhasil: ${passed} | Gagal: ${failed}</strong>`;
+      summaryDiv.style.background = failed === 0 ? '#bbf7d0' : '#fecaca';
+      summaryDiv.style.color = failed === 0 ? '#14532d' : '#7f1d1d';
+    }
+
+    const frame = document.getElementById('appFrame');
+    frame.onload = async function() {
+      const win = frame.contentWindow;
+
+      try {
+        const calc = win.calculatePayLaterDetails;
+        logTest('Fungsi calculatePayLaterDetails tersedia secara global di window', typeof calc === 'function');
+
+        const testDate = new Date('2026-10-26T10:00:00Z');
+
+        // UJI 1: POKOK RP 100.000 (SESUAI CONTOH RESMI PANDAI)
+        // 1. Tenor 14 Hari
+        const p14 = calc(100000, '14_days', testDate);
+        logTest('Tenor 14 Hari: Pokok Rp100.000, Bunga Rp0 (0%), Total Rp100.000, Dibayar 1x', 
+          p14.ratePercent === 0 && p14.interestAmount === 0 && p14.totalDue === 100000 && p14.installmentCount === 1,
+          `Bunga: Rp${p14.interestAmount}, Total: Rp${p14.totalDue}, Cicilan 1: Rp${p14.schedule[0]?.amount}`);
+
+        // 2. Tenor 1 Bulan
+        const p1m = calc(100000, '1_month', testDate);
+        logTest('Tenor 1 Bulan: Pokok Rp100.000, Bunga 3% (Rp3.000), Total Rp103.000, Dibayar 1x (30 hari)', 
+          p1m.ratePercent === 3 && p1m.interestAmount === 3000 && p1m.totalDue === 103000 && p1m.installmentCount === 1,
+          `Bunga: Rp${p1m.interestAmount}, Total: Rp${p1m.totalDue}, Cicilan 1: Rp${p1m.schedule[0]?.amount}, Hari: ${p1m.schedule[0]?.daysFromNow}`);
+
+        // 3. Tenor 2 Bulan
+        const p2m = calc(100000, '2_months', testDate);
+        const p2mSumCorrect = (p2m.schedule[0]?.amount + p2m.schedule[1]?.amount) === p2m.totalDue;
+        logTest('Tenor 2 Bulan: Pokok Rp100.000, Bunga Total 6% (Rp6.000), Total Rp106.000, Dicicil 2x masing-masing Rp53.000', 
+          p2m.ratePercent === 6 && p2m.interestAmount === 6000 && p2m.totalDue === 106000 && 
+          p2m.schedule[0]?.amount === 53000 && p2m.schedule[1]?.amount === 53000 && p2mSumCorrect,
+          `Cicilan 1: Rp${p2m.schedule[0]?.amount}, Cicilan 2: Rp${p2m.schedule[1]?.amount}, Total Tagihan: Rp${p2m.totalDue}`);
+
+        // 4. Tenor 3 Bulan
+        const p3m = calc(100000, '3_months', testDate);
+        const p3mSumCorrect = (p3m.schedule[0]?.amount + p3m.schedule[1]?.amount + p3m.schedule[2]?.amount) === p3m.totalDue;
+        logTest('Tenor 3 Bulan: Pokok Rp100.000, Bunga Total 9% (Rp9.000), Total Rp109.000, Cicilan 1 Rp36.333, Cicilan 2 Rp36.333, Cicilan 3 Rp36.334', 
+          p3m.ratePercent === 9 && p3m.interestAmount === 9000 && p3m.totalDue === 109000 && 
+          p3m.schedule[0]?.amount === 36333 && p3m.schedule[1]?.amount === 36333 && p3m.schedule[2]?.amount === 36334 && p3mSumCorrect,
+          `Cicilan 1: Rp${p3m.schedule[0]?.amount}, Cicilan 2: Rp${p3m.schedule[1]?.amount}, Cicilan 3: Rp${p3m.schedule[2]?.amount}, Total: Rp${p3m.totalDue}`);
+
+        // UJI 2: GENERALISASI NILAI ARBITRER & PEMBULATAN INTEGER RUPIAH
+        const arbitraryAmounts = [150000, 250000, 375500, 789450, 1000000];
+        let allArbitraryValid = true;
+        let arbError = '';
+
+        for (const amt of arbitraryAmounts) {
+          for (const t of ['14_days', '1_month', '2_months', '3_months']) {
+            const res = calc(amt, t);
+            if (!Number.isInteger(res.interestAmount) || !Number.isInteger(res.totalDue)) {
+              allArbitraryValid = false;
+              arbError = `Pecahan ditemukan pada total/bunga untuk nominal ${amt}, tenor ${t}`;
+              break;
+            }
+            const sumAll = res.schedule.reduce((acc, curr) => acc + curr.amount, 0);
+            if (sumAll !== res.totalDue) {
+              allArbitraryValid = false;
+              arbError = `Jumlah cicilan (${sumAll}) != Total tagihan (${res.totalDue}) untuk nominal ${amt}, tenor ${t}`;
+              break;
+            }
+            for (const s of res.schedule) {
+              if (!Number.isInteger(s.amount)) {
+                allArbitraryValid = false;
+                arbError = `Nominal cicilan #${s.installmentNo} bukan integer: ${s.amount}`;
+                break;
+              }
+            }
+          }
+          if (!allArbitraryValid) break;
+        }
+        logTest('Generalisasi Berbagai Nominal & Jumlah Seluruh Cicilan Selalu Tepat 100% Sama dengan Total Tagihan', 
+          allArbitraryValid, arbError || 'Diuji dengan Rp150.000, Rp250.000, Rp375.500, Rp789.450, Rp1.000.000 pada ke-4 tenor');
+
+        // UJI 3: LABEL NAMA TENOR RESMI
+        const gtn = win.getTenorName;
+        const labelsOk = 
+          gtn('14_days') === '14 Hari (Bunga 0%)' &&
+          gtn('1_month') === '1 Bulan (Bunga 3%)' &&
+          gtn('2_months') === '2 Bulan (Bunga Total 6%)' &&
+          gtn('3_months') === '3 Bulan (Bunga Total 9%)';
+        logTest('Penamaan tenor resmi getTenorName(tenor) akurat untuk ke-4 pilihan', labelsOk);
+
+        // UJI 4: INTEGRASI UI, PEMILIHAN METODE & TIDAK TERJADI RESET/HILANG PILIHAN
+        win.quickLogin('user');
+        const user = win.State.currentUser;
+        const State = win.State;
+
+        State.cart = [
+          { productId: 'prod_001', qty: 1 },
+          { productId: 'prod_005', qty: 2 }
+        ];
+        State.saveCart();
+
+        win.switchTab('cart');
+
+        win.selectPaymentType('paylater');
+        const paylaterSelected = win.selectedPaymentType === 'paylater' && win.window.selectedPaymentType === 'paylater';
+        logTest('Pemilihan metode pembayaran PayLater tersimpan stabil di variabel state dan window', paylaterSelected);
+
+        win.selectTenorMethod('2_months');
+        const tenor2mSelected = win.selectedTenor === '2_months' && win.window.selectedTenor === '2_months';
+        logTest('Perubahan tenor ke 2 bulan memperbarui tampilan tanpa submit form atau mereset halaman', tenor2mSelected);
+
+        win.selectTenorMethod('3_months');
+        const tenor3mSelected = win.selectedTenor === '3_months' && win.window.selectedTenor === '3_months';
+        logTest('Perubahan tenor ke 3 bulan mempertahankan pilihan ketika proses checkout berlanjut', tenor3mSelected);
+
+        // UJI 5: SIMULASI CHECKOUT DENGAN TENOR 3 BULAN (BUNGA 9%)
+        // Hitung subtotal riil dari database produk
+        const prod1 = State.products.find(p => p.id === 'prod_001');
+        const prod5 = State.products.find(p => p.id === 'prod_005');
+        const realSubtotal = (prod1.supplierPrice * 1) + (prod5.supplierPrice * 2); // 72500 + 33000 = 105500
+        const calcCart3m = calc(realSubtotal, '3_months');
+
+        // Pastikan limit awal user adalah 300.000
+        user.remainingLimit = 300000;
+        user.creditLimit = 300000;
+        user.limitHistory = user.limitHistory || [];
+        const allUsers = JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.USERS) || '[]');
+        const uIdx = allUsers.findIndex(u => u.id === user.id);
+        if (uIdx !== -1) {
+          allUsers[uIdx].remainingLimit = 300000;
+          win.State.saveUsers(allUsers);
+        }
+        win.localStorage.setItem(win.STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+
+        const orderCountBeforeCheckout = State.orders.length;
+        win.submitOrderCheckout(realSubtotal, calcCart3m.totalDue);
+
+        const latestOrder = State.orders[0];
+        const latestInstallment = State.installments[0];
+
+        logTest('Checkout pesanan berhasil dibuat dengan nomor pesanan canonical', 
+          latestOrder && latestOrder.id.startsWith('ORD-2026-'), `Nomor Pesanan: ${latestOrder?.id}`);
+        logTest('Metode pembayaran pesanan adalah Koperasi PayLater (3 Bulan (Bunga Total 9%))', 
+          latestOrder && latestOrder.paymentMethod.includes('3 Bulan (Bunga Total 9%)'), `Metode: ${latestOrder?.paymentMethod}`);
+        logTest('Total tagihan pesanan PayLater memperhitungkan bunga 9% (Rp' + calcCart3m.totalDue + ')', 
+          latestOrder && latestOrder.total === calcCart3m.totalDue, `Total Tagihan: Rp${latestOrder?.total}`);
+        logTest('Status pembayaran pesanan PayLater adalah Cicilan Berjalan / Terverifikasi Koperasi (belum lunas kas)', 
+          latestOrder && latestOrder.paymentStatus === 'Terverifikasi (BNPL Koperasi)', `Status: ${latestOrder?.paymentStatus}`);
+        logTest('Informasi tenor, suku bunga, dan rincian cicilan tersimpan lengkap di objek pesanan', 
+          latestOrder && latestOrder.paylaterDetails && latestOrder.paylaterDetails.ratePercent === 9 && latestOrder.paylaterDetails.schedule.length === 3,
+          `Suku Bunga: ${latestOrder?.paylaterDetails?.ratePercent}%, Jadwal: ${latestOrder?.paylaterDetails?.schedule?.length} termin`);
+
+        logTest('Kontrak cicilan tersimpan rapi di State.installments dengan status "active"', 
+          latestInstallment && latestInstallment.status === 'active' && latestInstallment.orderId === latestOrder.id,
+          `Kontrak: #${latestInstallment?.contractNo}, Sisa: Rp${latestInstallment?.remainingAmount}`);
+        logTest('Jadwal cicilan tersimpan presisi di kontrak cicilan (installmentSchedule)', 
+          latestInstallment && latestInstallment.installmentSchedule && latestInstallment.installmentSchedule.length === 3 &&
+          latestInstallment.installmentSchedule[0].amount === calcCart3m.schedule[0].amount && 
+          latestInstallment.installmentSchedule[2].amount === calcCart3m.schedule[2].amount,
+          `Cicilan 1: Rp${latestInstallment?.installmentSchedule[0]?.amount}, Cicilan 3: Rp${latestInstallment?.installmentSchedule[2]?.amount}`);
+
+        const expectedRemainingLimit = 300000 - realSubtotal;
+        const updatedUser = win.State.currentUser || JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.CURRENT_USER));
+        logTest(`Plafon limit belanja dipotong satu kali sebesar pokok belanja (Rp${realSubtotal}): Sisa Rp${expectedRemainingLimit}`, 
+          updatedUser && updatedUser.remainingLimit === expectedRemainingLimit, `Sisa Limit: Rp${updatedUser?.remainingLimit}`);
+        logTest('Mutasi limit PayLater tercatat detail di limitHistory pengguna', 
+          updatedUser && updatedUser.limitHistory && updatedUser.limitHistory.length > 0 && 
+          updatedUser.limitHistory[updatedUser.limitHistory.length - 1].changeAmount === -realSubtotal,
+          `Perubahan Limit: Rp${updatedUser?.limitHistory?.[updatedUser.limitHistory.length - 1]?.changeAmount}`);
+
+        // UJI 6: CEGAH CHECKOUT JIKA LIMIT TIDAK MENCUKUPI
+        State.cart = [{ productId: 'prod_001', qty: 10 }]; // 72.500 * 10 = 725.000 > expectedRemainingLimit
+        State.saveCart();
+        win.selectedPaymentType = 'paylater';
+
+        const orderCountBefore = State.orders.length;
+        win.submitOrderCheckout(725000, 790250);
+
+        const finalUser = win.State.currentUser || JSON.parse(win.localStorage.getItem(win.STORAGE_KEYS.CURRENT_USER));
+        logTest('Pencegahan checkout jika limit tidak mencukupi berhasil (pesanan ditolak)', 
+          State.orders.length === orderCountBefore, `Jumlah Pesanan Tetap: ${State.orders.length}`);
+        logTest('Limit pengguna aman dan tidak terpotong saat pesanan ditolak', 
+          finalUser && finalUser.remainingLimit === expectedRemainingLimit, `Limit Tetap: Rp${finalUser?.remainingLimit}`);
+
+      } catch (err) {
+        logTest('Eksekusi Pengujian Keseluruhan', false, err.stack || err.message);
+      }
+    };
+  </script>
+</body>
+</html>
