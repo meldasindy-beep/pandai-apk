@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pandai-pwa-v3';
+const CACHE_NAME = 'pandai-pwa-v4';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const STATIC_ASSETS = [
   './icon-192.png',
   './icon-512.png',
   './qrcode.min.js',
+  './cf-sync.js',
   './qris-imelda.jpg',
   'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css',
   'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css',

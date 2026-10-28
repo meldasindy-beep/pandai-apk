@@ -1,0 +1,12 @@
+name = "pandai-api"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pandai-db"
+database_id = "GANTI_DENGAN_ID_DARI_wrangler_d1_create"
+
+[vars]
+ALLOWED_ORIGIN = "*"   # ganti ke domain Pages Anda, mis. https://pandai.pages.dev
+# Secret (jangan ditulis di sini): JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD
